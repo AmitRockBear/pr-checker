@@ -71,7 +71,6 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
       "file": "string", // Path to the violated file.
       "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
       "violation": "string", // Brief description of the standard violated.
-      "code": "string" // Relevant line(s) of code from the diff showing the violation.
     }}
     // ... more violations
   ] // If no violations found, provide an empty array: []
