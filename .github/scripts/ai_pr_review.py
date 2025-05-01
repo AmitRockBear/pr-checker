@@ -68,8 +68,7 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
     {{
       "file": "string", // Path to the violated file.
       "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
-      "violation": "string", // Brief description of the standard violated.
-      "fixSuggestion": "string" // Relevant line(s) of code that will effectively fix the violation. This should be a code block formatted as a string.
+      "violation": "string", // The rule being violated from the coding standards. Include the example from the coding standards if applicable."
     }}
     // ... more violations
   ] // If no violations found, provide an empty array: []
@@ -230,14 +229,10 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
                 file = violation.get("file")
                 line = violation.get("line")
                 violation_desc = violation.get("violation")
-                fix_suggestion_code_snippet = violation.get("fixSuggestion", "N/A")
 
                 if file and isinstance(line, int) and violation_desc:
                     # Format the message for the GitHub comment body
-                    message = (
-                        f"**Violation:** {violation_desc}\n\n"
-                        f"**Fix Suggestion:**\n```code\n{fix_suggestion_code_snippet}\n```"
-                    )
+                    message = f"**Violation:** {violation_desc}\n\n"
                     violations_output.append(
                         {"file": file, "line": line, "message": message}
                     )
