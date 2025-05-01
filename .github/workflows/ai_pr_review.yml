@@ -6,8 +6,8 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  pull-requests: write # To comment on the PR
-  contents: read     # To read repo contents (standards, diff, script)
+  pull-requests: write # To comment on the PR and post review comments
+  contents: read     # To read repo contents
 
 jobs:
   ai_review:
@@ -15,26 +15,34 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        # Ensure we fetch enough history for diff context if needed, though gh pr diff usually handles this
+        # with:
+        #   fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # Or your preferred Python version
+          python-version: '3.10'
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Ensure requirements file exists and is in the right place
           if [ -f .github/scripts/requirements.txt ]; then
             pip install -r .github/scripts/requirements.txt
           else
-            echo "Error: .github/scripts/requirements.txt not found."
-            exit 1
+            echo "Error: .github/scripts/requirements.txt not found." ; exit 1
           fi
 
       - name: Get PR Metadata
         id: pr_metadata
         run: |
+          # Output PR Number
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+          # Output Head SHA (needed for line comments)
+          echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+
+          # Use delimiters for potentially long title/description
           DELIMITER_TITLE=$(openssl rand -hex 16)
           echo "pr_title<<$DELIMITER_TITLE" >> $GITHUB_OUTPUT
           echo "${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
@@ -49,131 +57,233 @@ jobs:
           echo "$pr_desc" >> $GITHUB_OUTPUT
           echo "$DELIMITER_DESC" >> $GITHUB_OUTPUT
 
-          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
       - name: Get PR Diff
         id: pr_diff
         run: |
           DELIMITER_DIFF=$(openssl rand -hex 16)
+          # Get diff against the base branch for context
           gh pr diff ${{ steps.pr_metadata.outputs.pr_number }} --repo ${{ github.repository }} > pr.diff || \
-            echo "Failed to get diff using GitHub CLI." >&2
+            echo "::warning::Failed to get diff using GitHub CLI."
 
           if [ ! -s pr.diff ]; then
             echo "pr_diff_content=No changes detected or diff could not be retrieved." >> $GITHUB_OUTPUT
           else
             echo "pr_diff_content<<$DELIMITER_DIFF" >> $GITHUB_OUTPUT
-            # Handle potential trailing newline issues with cat in this context
             cat pr.diff >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT # Add a newline just in case cat doesn't
+            echo "" >> $GITHUB_OUTPUT # Add trailing newline
             echo "$DELIMITER_DIFF" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- CHANGE: Simplify Load Coding Standards ---
       - name: Check for Coding Standards File
         id: coding_standards
         run: |
           standards_file=".github/CODING_STANDARDS.md" # Adjust path if needed
           if [[ ! -f "$standards_file" ]]; then
-             echo "::error::Coding standards file not found at $standards_file."
-             exit 1 # Fail the job if standards file is mandatory and missing
+             echo "::error::Coding standards file not found at $standards_file." ; exit 1
           fi
-          # No need to output content anymore
-          echo "Standards file found at $standards_file"
+          echo "::debug::Standards file found at $standards_file"
+          # Output the path for the python script
+          echo "standards_path=$standards_file" >> $GITHUB_OUTPUT
 
-      # --- CHANGE: Pass file path to script ---
       - name: Run AI Review Python Script
         id: run_script
-        continue-on-error: true
+        continue-on-error: true # Continue so we can report script failure if needed
         run: |
-          # Define the path to the standards file
-          STANDARDS_FILE_PATH=".github/CODING_STANDARDS.md"
-
-          # Execute the python script, passing path instead of content
+          # Execute the python script
           python .github/scripts/ai_pr_review.py \
             --title "$PR_TITLE" \
             --description "$PR_DESCRIPTION" \
             --diff "$PR_DIFF_CONTENT" \
-            --standards-file "$STANDARDS_FILE_PATH" \
-            > review_output.txt # Capture stdout
+            --standards-file "${{ steps.coding_standards.outputs.standards_path }}" \
+            > review_output.json # Capture stdout (JSON)
 
           script_exit_code=$?
           if [ $script_exit_code -ne 0 ]; then
-            echo "Python script failed with exit code $script_exit_code." >&2
-            # Optionally display captured stderr if python script writes it
-            # cat error_log.txt >&2
-            exit 1
+            echo "::error::Python script failed with exit code $script_exit_code."
+            # Optionally attempt to output captured stderr from python
+            # if [ -s review_error.log ]; then cat review_error.log; fi
+            exit 1 # Make step fail explicitly
           fi
 
-          # Save the script's stdout (the review comment) to GitHub Actions output
-          DELIMITER_COMMENT=$(openssl rand -hex 16)
-          echo "review_comment<<$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
-          if [[ -f "review_output.txt" ]]; then
-             cat review_output.txt >> $GITHUB_OUTPUT
-             echo "" >> $GITHUB_OUTPUT # Add trailing newline
+          # Check if output file is valid JSON before saving
+          if jq '.' review_output.json > /dev/null 2>&1; then
+              echo "::debug::Python script generated valid JSON."
+              # Save the script's JSON output to GitHub Actions output
+              DELIMITER_JSON=$(openssl rand -hex 16)
+              echo "review_json<<$DELIMITER_JSON" >> $GITHUB_OUTPUT
+              cat review_output.json >> $GITHUB_OUTPUT
+              echo "" >> $GITHUB_OUTPUT # Add trailing newline
+              echo "$DELIMITER_JSON" >> $GITHUB_OUTPUT
+          else
+              echo "::error::Python script did not generate valid JSON."
+              echo "--- Script Output ---"
+              cat review_output.json # Print invalid output for debugging
+              echo "--- End Script Output ---"
+              exit 1
           fi
-          echo "$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
         env:
-          # GEMINI key is still needed by the script
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Pass other potentially multi-line outputs via env vars
           PR_TITLE: ${{ steps.pr_metadata.outputs.pr_title }}
           PR_DESCRIPTION: ${{ steps.pr_metadata.outputs.pr_description }}
           PR_DIFF_CONTENT: ${{ steps.pr_diff.outputs.pr_diff_content }}
-          # CODING_STANDARDS env var is no longer needed here
 
-      - name: Comment on PR
+      # --- New Step to Parse JSON and Set Outputs ---
+      - name: Parse Review Output
+        id: parse_output
         uses: actions/github-script@v7
-        # --- Add env block ---
+        with:
+          script: |
+            const scriptOutput = `${{ steps.run_script.outputs.review_json }}`;
+            const scriptOutcome = '${{ steps.run_script.outcome }}';
+
+            if (scriptOutcome !== 'success') {
+              console.log("Skipping parsing as script failed.");
+              // Set empty outputs to avoid errors in later steps
+              core.setOutput('summary', '');
+              core.setOutput('violations_json', '[]'); // Empty JSON array string
+              return;
+            }
+
+            if (!scriptOutput || scriptOutput.trim() === '') {
+               console.log("Script output is empty.");
+               core.setOutput('summary', '');
+               core.setOutput('violations_json', '[]');
+               return;
+            }
+
+            try {
+              const parsedData = JSON.parse(scriptOutput);
+              const summary = parsedData.summary || '';
+              const violations = parsedData.violations || [];
+
+              // Output the summary string
+              core.setOutput('summary', summary);
+
+              // Output the violations array as a JSON string for the next step
+              core.setOutput('violations_json', JSON.stringify(violations));
+
+            } catch (e) {
+              console.error("Error parsing JSON output from Python script:", e);
+              console.error("Raw Output:", scriptOutput); // Log raw output on error
+              // Set empty outputs
+              core.setOutput('summary', '');
+              core.setOutput('violations_json', '[]');
+              // Optionally fail the step: core.setFailed("Failed to parse JSON output.");
+            }
+
+      # --- New Step for Summary Comment ---
+      - name: Post Summary Comment
+        if: steps.run_script.outcome == 'success' && steps.parse_output.outputs.summary != '' # Only run if script succeeded and summary exists
+        uses: actions/github-script@v7
         env:
-          # Pass the potentially problematic output as an environment variable
-          REVIEW_COMMENT_BODY: ${{ steps.run_script.outputs.review_comment }}
-          SCRIPT_OUTCOME: ${{ steps.run_script.outcome }} # Pass outcome too if needed inside script
-          PR_NUMBER: ${{ steps.pr_metadata.outputs.pr_number }}
-        # --- End env block ---
+           PR_NUMBER: ${{ steps.pr_metadata.outputs.pr_number }}
+           SUMMARY_BODY: ${{ steps.parse_output.outputs.summary }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Retrieve values from environment variables
-            const prNumber = process.env.PR_NUMBER;
-            const reviewComment = process.env.REVIEW_COMMENT_BODY || ''; // Default to empty string if unset
-            const scriptOutcome = process.env.SCRIPT_OUTCOME;
+            const issueNumber = parseInt(process.env.PR_NUMBER, 10);
+            const summaryBody = process.env.SUMMARY_BODY;
 
-            // Ensure prNumber is treated as a number if needed by the API call
-            const issueNumber = parseInt(prNumber, 10);
             if (isNaN(issueNumber)) {
-              console.error("Error: Invalid PR Number:", prNumber);
-              process.exit(1); // Exit if PR number is invalid
+              core.setFailed(`Invalid PR Number: ${process.env.PR_NUMBER}`);
+              return;
+            }
+            if (!summaryBody || summaryBody.trim() === '') {
+               console.log("Summary is empty, skipping comment.");
+               return;
             }
 
-            let commentBody = '';
-
-            if (scriptOutcome === 'failure') {
-              commentBody = `⚠️ **AI Review Failed**\n\nCould not generate AI review. The review script encountered an error. Please check the workflow run logs for details.`;
-            } else if (!reviewComment || reviewComment.trim() === '') {
-              // Check the trimmed value from the environment variable
-              commentBody = `⚠️ **AI Review Warning**\n\nGemini API returned an empty response or the review script produced no output.`;
-            } else {
-              // Safely use the comment body from the environment variable
-              commentBody = `## 🤖 AI Pull Request Review\n\n${reviewComment}`;
-            }
-
-            // Check if commentBody is unexpectedly long (optional sanity check)
-            // if (commentBody.length > 65535) { // GitHub comment limit
-            //   console.warn("Warning: Comment body exceeds GitHub limit, may be truncated.");
-            //   commentBody = commentBody.substring(0, 65500) + "\n... (truncated)";
-            // }
+            const commentHeader = `## 🤖 AI Pull Request Summary\n\n`;
+            const fullComment = commentHeader + summaryBody;
 
             try {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber, // Use the parsed number
-                body: commentBody
-              });
+               console.log(`Posting summary comment to PR #${issueNumber}`);
+               await github.rest.issues.createComment({
+                 owner: context.repo.owner,
+                 repo: context.repo.repo,
+                 issue_number: issueNumber,
+                 body: fullComment.substring(0, 65535) // Prevent exceeding comment limit
+               });
             } catch (error) {
-               console.error("Error posting comment:", error);
-               // Re-throw or exit to ensure the workflow step fails clearly
-               throw error;
+               core.setFailed(`Error posting summary comment: ${error}`);
             }
+
+      # --- New Step for Violation Line Comments ---
+      - name: Post Violation Line Comments
+        if: steps.run_script.outcome == 'success' && steps.parse_output.outputs.violations_json != '[]' # Only run if script succeeded and violations exist
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr_metadata.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr_metadata.outputs.head_sha }}
+          VIOLATIONS_JSON_STRING: ${{ steps.parse_output.outputs.violations_json }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pullNumber = parseInt(process.env.PR_NUMBER, 10);
+            const headSha = process.env.HEAD_SHA;
+            const violationsJson = process.env.VIOLATIONS_JSON_STRING;
+            const { owner, repo } = context.repo;
+
+            if (isNaN(pullNumber)) {
+               core.setFailed(`Invalid PR Number: ${process.env.PR_NUMBER}`);
+               return;
+            }
+            if (!headSha) {
+               core.setFailed(`Missing HEAD SHA`);
+               return;
+            }
+
+            let violations = [];
+            try {
+              violations = JSON.parse(violationsJson);
+            } catch (e) {
+              core.setFailed(`Error parsing violations JSON: ${e}`);
+              console.error("Violations JSON String:", violationsJson);
+              return;
+            }
+
+            if (!Array.isArray(violations) || violations.length === 0) {
+              console.log("No violations found or violations array is invalid/empty.");
+              return;
+            }
+
+            console.log(`Found ${violations.length} violations to comment on.`);
+
+            // Post comments sequentially with error handling
+            for (const violation of violations) {
+              if (!violation.file || !violation.line || !violation.message) {
+                 console.warn("Skipping incomplete violation object:", violation);
+                 continue;
+              }
+
+              const commentBody = `**🤖 AI Coding Standard Violation:**\n\n${violation.message}`;
+
+              console.log(`Posting violation comment on ${violation.file}, line ${violation.line}`);
+
+              try {
+                 await github.rest.pulls.createReviewComment({
+                   owner: owner,
+                   repo: repo,
+                   pull_number: pullNumber,
+                   body: commentBody.substring(0, 65535),
+                   commit_id: headSha, // Commit SHA where change exists
+                   path: violation.file, // File path relative to repo root
+                   line: violation.line, // Line number in the file *after* the changes
+                   // side: 'RIGHT', // Typically comment on the changed side
+                   // start_line: can be used with line for multi-line comments if needed
+                 });
+                 // Optional: Add a small delay if rate limits become an issue
+                 // await new Promise(resolve => setTimeout(resolve, 500));
+              } catch (error) {
+                 // Log specific error but continue trying other comments
+                 console.error(`Failed to post comment for violation on ${violation.file}:${violation.line}. Error: ${error}`);
+                 // Log request details that might have failed
+                 console.error(`Request details: path=${violation.file}, line=${violation.line}, commit=${headSha}`);
+                 // You could choose to fail the whole step here if needed:
+                 // core.setFailed(`Failed to post comment: ${error}`); return;
+              }
+            }
+            console.log("Finished posting violation comments.");

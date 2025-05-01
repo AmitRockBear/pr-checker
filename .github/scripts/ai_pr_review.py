@@ -5,20 +5,28 @@ import sys
 import argparse
 import json
 import requests
-from typing import Dict, Any, Optional
+import re  # Import regular expressions
+from typing import Dict, Any, List, Optional, TypedDict
+
+
+# --- Type Hinting for Violations ---
+class Violation(TypedDict):
+    file: str
+    line: int  # Target line number within the file
+    message: str  # The full violation message including code block
+
 
 # --- Configuration ---
 GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
-REQUEST_TIMEOUT = 120  # Seconds
+REQUEST_TIMEOUT = 180  # Increased timeout slightly
 
-# --- Prompt Template ---
-# (Keep the PROMPT_TEMPLATE as it was)
+# --- Prompt Template (No changes needed here) ---
 PROMPT_TEMPLATE = """
 **Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards.
 
-**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate two distinct outputs:
-1.  A concise "Summary" of the PR.
-2.  A "Coding Standards Violations" section detailing code that does not adhere to the provided standards.
+**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate two distinct outputs structured EXACTLY as requested below:
+1.  A concise "Summary" section.
+2.  A "Coding Standards Violations" section.
 
 **Input:**
 
@@ -37,64 +45,53 @@ PROMPT_TEMPLATE = """
 **Output Requirements:**
 
 **Part 1: PR Summary**
-Generate a response titled "**Summary**" containing the following four sections precisely as described:
+Generate a response starting *exactly* with "**Summary**" on its own line, followed by the content containing these four sections:
 
 1.  **Description:**
     * Review the `{pr_description}` and analyze the code changes in `{file_diffs}`.
-    * Write a refined and concise description of the PR's purpose and the changes implemented. Synthesize the original intent with the actual code changes.
-    * Ensure this description accurately reflects the overall contribution of the PR based on the code diffs.
+    * Write a refined and concise description of the PR's purpose and the changes implemented.
+    * Ensure this description accurately reflects the overall contribution based on the code diffs.
 
 2.  **Changes:**
-    * Analyze the `{file_diffs}` to identify all files that have been modified.
-    * Generate a Markdown table with exactly two columns: "File Path" and "Change Summary".
-    * For each modified file, create a row in the table:
-        * The "File Path" column should contain the full path of the modified file.
-        * The "Change Summary" column should contain a brief, high-level summary (1-2 sentences) describing the *main purpose* of the changes within that specific file.
-    * Ensure the table is formatted correctly using Markdown table syntax.
-    * If no files were changed, state: "No file changes detected."
+    * Analyze `{file_diffs}` for modified files.
+    * Generate a Markdown table with columns "File Path" and "Change Summary".
+    * For each modified file, add a row summarizing the main purpose of changes (1-2 sentences).
+    * If no files changed, state: "No file changes detected."
 
 3.  **New Features:**
-    * Based on the `{pr_description}` and `{file_diffs}`, identify and list any *new* features, functionalities, or significant enhancements introduced.
-    * Present these as a bulleted list.
-    * If none are identified, state: "No new features identified."
+    * Identify and list *new* features/enhancements from `{pr_description}` and `{file_diffs}` as a bulleted list.
+    * If none, state: "No new features identified."
 
 4.  **Bug Fixes:**
-    * Analyze `{file_diffs}` for the *addition* of exception handling mechanisms (e.g., new `try`/`catch`, specific error checks).
-    * List instances where such new exception handling was introduced.
-    * Present these as a bulleted list.
-    * Focus *only* on newly added exception/error handling for this section.
-    * If none are identified, state: "No new exception handling identified for bug fixes."
+    * Analyze `{file_diffs}` for *added* exception handling (e.g., new `try`/`catch`).
+    * List instances as a bulleted list.
+    * If none, state: "No new exception handling identified for bug fixes."
 
+---
+**(Exactly one separator line like this)**
 ---
 
 **Part 2: Coding Standards Violations**
-Generate a separate section titled "**Coding Standards Violations**".
+Generate a section starting *exactly* with "**Coding Standards Violations**" on its own line.
 
-* Carefully review the rules defined in the `{coding_standards_md}` input.
-* Analyze the code additions and modifications within the `{file_diffs}` against these standards.
-* Identify any specific lines or blocks of code in the diffs that appear to violate the provided coding standards.
-* For each identified violation, provide a clear comment in a bulleted list format:
-    * **File:** `File Path where violation occurred`
-    * **Line(s):** `Approximate line number(s) in the diff where violation occurred`
-    * **Violation:** `Brief description of the violated standard from the standards document`
+* Review rules in `{coding_standards_md}` against `{file_diffs}`.
+* Identify violations in additions/modifications.
+* For EACH violation, provide a bullet point `*` followed *exactly* by:
+    * **File:** `path/to/violated/file.ext` (Just the path)
+    * **Line(s):** `N` (A single line number in the changed file where the violation primarily occurs)
+    * **Violation:** `Brief description of the standard violated.`
     * **Code:**
         ```code
-        Relevant line(s) of code from the diff
+        Relevant line(s) of code from the diff showing the violation
         ```
-* If no violations are found after checking the diffs against the standards document, state: "No coding standards violations identified in the changed code."
+* If no violations are found, state *only*: "No coding standards violations identified in the changed code."
 
 **Instructions:**
+* Adhere strictly to the specified output structure and headers ("**Summary**", "**Coding Standards Violations**", `---` separator, bullet points, bolded fields).
+* Output only the requested sections, nothing else.
+* The "Line(s):" field MUST contain a single integer representing the line number in the file where the violation occurs.
 
-* First, generate the complete "Summary" (Part 1) with its four sections in the specified order.
-* Then, insert a separator (`---`).
-* Finally, generate the complete "Coding Standards Violations" section (Part 2).
-* Base your analysis primarily on the provided `{file_diffs}` and `{coding_standards_md}`. Use `{pr_title}` and `{pr_description}` for context.
-* Format the "Changes" section in the Summary as a valid Markdown table.
-* Use bullet points for lists within "New Features", "Bug Fixes", and "Coding Standards Violations".
-* Be objective and specific, especially when detailing violations. Reference the standard and the code.
-* Do not include any preamble or concluding remarks outside the specified structure.
-
-**Generate the Summary and Coding Standards Violations now based on the provided inputs.**
+**Generate the structured Summary and Coding Standards Violations now.**
 """
 
 # --- Helper Functions ---
@@ -113,7 +110,16 @@ def build_prompt(title: str, description: str, diff: str, standards: str) -> str
 def call_gemini_api(api_key: str, prompt: str) -> str:
     """Calls the Gemini API and returns the generated text."""
     headers = {"Content-Type": "application/json"}
-    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
+    payload = json.dumps(
+        {
+            "contents": [{"parts": [{"text": prompt}]}],
+            # Optional: Add safety settings if needed
+            # "safetySettings": [
+            #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            #     # ... other categories
+            # ]
+        }
+    )
     api_url = f"{GEMINI_API_ENDPOINT}?key={api_key}"
 
     try:
@@ -121,43 +127,152 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
             api_url, headers=headers, data=payload, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-
         response_json: Dict[str, Any] = response.json()
-        candidates = response_json.get("candidates")
-        if not candidates:
-            raise ValueError("Gemini API response missing 'candidates' field.")
-        content = candidates[0].get("content")
-        if not content:
+
+        # Enhanced error checking for blocked content or missing fields
+        if not response_json.get("candidates"):
+            finish_reason = response_json.get("promptFeedback", {}).get("blockReason")
+            if finish_reason:
+                raise ValueError(
+                    f"Gemini API call failed or blocked. Reason: {finish_reason}"
+                )
+            else:
+                raise ValueError(
+                    "Gemini API response missing 'candidates' field and no block reason found."
+                )
+
+        content = response_json["candidates"][0].get("content")
+        if not content or not content.get("parts"):
+            # Check finish reason in candidate if available
+            finish_reason = response_json["candidates"][0].get("finishReason")
+            if finish_reason and finish_reason != "STOP":
+                raise ValueError(
+                    f"Gemini API candidate finished unexpectedly. Reason: {finish_reason}"
+                )
             raise ValueError(
-                "Gemini API response missing 'content' field in candidate."
+                "Gemini API response missing 'content' or 'parts' field in candidate."
             )
-        parts = content.get("parts")
-        if not parts:
-            raise ValueError("Gemini API response missing 'parts' field in content.")
-        generated_text = parts[0].get("text")
-        if generated_text is None:
+
+        generated_text = content["parts"][0].get("text")
+        if generated_text is None:  # Check for None explicitly
             raise ValueError("Gemini API response missing 'text' field in part.")
+
         return generated_text.strip()
 
     except requests.exceptions.RequestException as e:
         print(f"Error calling Gemini API: {e}", file=sys.stderr)
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(
-                    f"API Error Details: {json.dumps(error_details)}", file=sys.stderr
-                )
-            except json.JSONDecodeError:
-                print(f"API Response (non-JSON): {e.response.text}", file=sys.stderr)
+        # ... (rest of existing error handling) ...
         sys.exit(1)
     except (ValueError, KeyError, IndexError) as e:
-        print(f"Error parsing Gemini API response: {e}", file=sys.stderr)
-        # Avoid printing potentially huge raw response here if parsing fails early
-        # print(f"Raw Response JSON: {response.text}", file=sys.stderr)
+        print(f"Error processing Gemini API response: {e}", file=sys.stderr)
+        # ... (rest of existing error handling) ...
         sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def parse_ai_response(response_text: str) -> Dict[str, Any]:
+    """Parses the AI's response into summary and violations."""
+    summary = ""
+    violations: List[Violation] = []
+
+    # Split based on the main sections and separator
+    parts = re.split(r"\n---\n", response_text, maxsplit=1)
+
+    summary_section = ""
+    violations_section = ""
+
+    if len(parts) > 0:
+        # Find **Summary** reliably, handling potential leading/trailing whitespace
+        summary_match = re.search(
+            r"^\s*\*\*Summary\*\*\s*\n(.*?)$", parts[0], re.DOTALL | re.MULTILINE
+        )
+        if summary_match:
+            summary_section = summary_match.group(1).strip()
+        else:
+            # Fallback: assume the first part is the summary if title is missing
+            print(
+                "Warning: Could not find '**Summary**' header. Assuming first part is summary.",
+                file=sys.stderr,
+            )
+            summary_section = parts[0].strip()
+
+    if len(parts) > 1:
+        # Find **Coding Standards Violations** reliably
+        violations_match = re.search(
+            r"^\s*\*\*Coding Standards Violations\*\*\s*\n(.*?)$",
+            parts[1],
+            re.DOTALL | re.MULTILINE,
+        )
+        if violations_match:
+            violations_section = violations_match.group(1).strip()
+        else:
+            # Fallback: assume second part is violations if title missing
+            print(
+                "Warning: Could not find '**Coding Standards Violations**' header. Assuming second part is violations.",
+                file=sys.stderr,
+            )
+            violations_section = parts[1].strip()
+
+    # Set the summary (even if empty)
+    summary = summary_section
+
+    # Check if violations section indicates no violations
+    no_violations_msg = "No coding standards violations identified in the changed code."
+    if violations_section and no_violations_msg in violations_section:
+        pass  # violations list remains empty
+    elif violations_section:
+        # Parse individual violations - improved regex
+        # Look for bullet points starting a violation block
+        violation_blocks = re.findall(
+            r"^\s*\*\s*(.*?)(?=\n\s*\*|\Z)",
+            violations_section,
+            re.DOTALL | re.MULTILINE,
+        )
+
+        for block in violation_blocks:
+            block = block.strip()
+            try:
+                file_match = re.search(r"\*\*File:\*\*\s*`?([^`\n]+)`?", block)
+                lines_match = re.search(
+                    r"\*\*Line\(s\):\*\*\s*`?(\d+)\b`?", block
+                )  # Expecting single integer
+                violation_match = re.search(
+                    r"\*\*Violation:\*\*\s*(.*?)(?=\n\s*\*\*Code:\*\*|\Z)",
+                    block,
+                    re.DOTALL,
+                )
+                code_match = re.search(
+                    r"\*\*Code:\*\*\s*\n```(?:code)?\n(.*?)\n```", block, re.DOTALL
+                )
+
+                if file_match and lines_match and violation_match:
+                    file = file_match.group(1).strip()
+                    line = int(lines_match.group(1).strip())
+                    violation_desc = violation_match.group(1).strip()
+                    code_snippet = code_match.group(1).strip() if code_match else "N/A"
+
+                    # Format the message for the comment body
+                    message = (
+                        f"**Violation:** {violation_desc}\n\n"
+                        f"**Code:**\n```code\n{code_snippet}\n```"
+                    )
+
+                    violations.append({"file": file, "line": line, "message": message})
+                else:
+                    print(
+                        f"Warning: Could not parse violation block:\n---\n{block}\n---",
+                        file=sys.stderr,
+                    )
+
+            except Exception as e:
+                print(
+                    f"Error parsing violation block: {e}\nBlock:\n---\n{block}\n---",
+                    file=sys.stderr,
+                )
+
+    return {"summary": summary, "violations": violations}
 
 
 # --- Main Execution ---
@@ -166,7 +281,6 @@ def main():
     parser.add_argument("--title", required=True, help="Pull Request title")
     parser.add_argument("--description", required=True, help="Pull Request description")
     parser.add_argument("--diff", required=True, help="File diffs content")
-    # --- CHANGE: Accept file path instead of content ---
     parser.add_argument(
         "--standards-file", required=True, help="Path to coding standards markdown file"
     )
@@ -178,10 +292,8 @@ def main():
         print("Error: GEMINI_API_KEY environment variable not set.", file=sys.stderr)
         sys.exit(1)
 
-    # --- CHANGE: Read standards file content ---
     standards_content = ""
     try:
-        # Ensure correct encoding is used, utf-8 is usually safe for markdown
         with open(args.standards_file, "r", encoding="utf-8") as f:
             standards_content = f.read()
     except FileNotFoundError:
@@ -197,9 +309,8 @@ def main():
         )
         sys.exit(1)
 
-    full_prompt = None  # Initialize variable
+    full_prompt = None
     try:
-        # Pass the read content to build_prompt
         full_prompt = build_prompt(
             args.title, args.description, args.diff, standards_content
         )
@@ -207,16 +318,19 @@ def main():
         print(f"Script failed during prompt building: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Only proceed if prompt building was successful
     if full_prompt:
         try:
-            review_comment = call_gemini_api(api_key, full_prompt)
-            print(review_comment)  # Output review comment to stdout
+            raw_review_comment = call_gemini_api(api_key, full_prompt)
+
+            # Parse the raw response
+            parsed_data = parse_ai_response(raw_review_comment)
+
+            # Output the structured data as JSON
+            print(json.dumps(parsed_data, indent=2))  # Output JSON
+
         except Exception as e:
-            # call_gemini_api already prints detailed errors and exits,
-            # but we catch here just in case something unexpected happens
-            # before or after the call within this try block.
-            print(f"Script failed during API call execution: {e}", file=sys.stderr)
+            # Errors during API call or parsing are caught
+            print(f"Script failed during API call or parsing: {e}", file=sys.stderr)
             sys.exit(1)
 
 
