@@ -1,0 +1,260 @@
+# .github/workflows/ai_pr_review.yml
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write # To comment on the PR
+  contents: read     # To read the repo contents (coding standards, diff)
+
+jobs:
+  ai_review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Get PR Metadata
+        id: pr_metadata
+        run: |
+          echo "pr_title<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Handle potentially empty description
+          pr_desc="${{ github.event.pull_request.body }}"
+          if [[ -z "$pr_desc" ]]; then
+            pr_desc="No description provided."
+          fi
+          echo "pr_description<<EOF" >> $GITHUB_OUTPUT
+          echo "$pr_desc" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Get PR Diff
+        id: pr_diff
+        run: |
+          # Use GitHub CLI for authenticated API call to get diff
+          # This respects .gitattributes and produces a clean diff
+          gh pr diff ${{ steps.pr_metadata.outputs.pr_number }} --repo ${{ github.repository }} > pr.diff || \
+            echo "Failed to get diff using GitHub CLI." >&2 # Fallback or error handling can be added
+
+          # Check if diff file is empty or fetching failed
+          if [ ! -s pr.diff ]; then
+            echo "pr_diff_content=No changes detected or diff could not be retrieved." >> $GITHUB_OUTPUT
+          else
+            # Store diff content for the prompt, ensure it fits in environment variable limits if large
+            # Using EOF markers handles multi-line content safely
+            echo "pr_diff_content<<EOF" >> $GITHUB_OUTPUT
+            cat pr.diff >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Use built-in token for gh CLI
+
+      - name: Load Coding Standards
+        id: coding_standards
+        run: |
+          standards_file=".github/CODING_STANDARDS.md" # Adjust path if needed
+          if [[ -f "$standards_file" ]]; then
+            echo "content<<EOF" >> $GITHUB_OUTPUT
+            cat "$standards_file" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "content=Coding standards file not found at $standards_file." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare AI Prompt
+        id: prepare_prompt
+        run: |
+          # Raw prompt template - Using single quotes to prevent shell expansion inside
+          read -r -d '' prompt_template <<'PROMPT_EOF'
+**Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards.
+
+**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate two distinct outputs:
+1.  A concise "Summary" of the PR.
+2.  A "Coding Standards Violations" section detailing code that does not adhere to the provided standards.
+
+**Input:**
+
+1.  **PR Title:** `{PR_TITLE}`
+2.  **Original PR Description:** `{PR_DESCRIPTION}`
+3.  **File Diffs:**
+    ```diff
+    {FILE_DIFFS}
+    ```
+4.  **Coding Standards (Markdown Content):**
+    ```markdown
+    {CODING_STANDARDS_MD}
+    ```
+
+**Output Requirements:**
+
+**Part 1: PR Summary**
+
+Generate a response titled "**Summary**" containing the following four sections precisely as described:
+
+1.  **Description:**
+    * Review the `{PR_DESCRIPTION}` and analyze the code changes in `{FILE_DIFFS}`.
+    * Write a refined and concise description of the PR's purpose and the changes implemented. Synthesize the original intent with the actual code changes.
+    * Ensure this description accurately reflects the overall contribution of the PR based on the code diffs.
+
+2.  **Changes:**
+    * Analyze the `{FILE_DIFFS}` to identify all files that have been modified.
+    * Generate a Markdown table with exactly two columns: "File Path" and "Change Summary".
+    * For each modified file, create a row in the table:
+        * The "File Path" column should contain the full path of the modified file.
+        * The "Change Summary" column should contain a brief, high-level summary (1-2 sentences) describing the *main purpose* of the changes within that specific file.
+    * Ensure the table is formatted correctly using Markdown table syntax.
+    * If no files were changed, state: "No file changes detected."
+
+3.  **New Features:**
+    * Based on the `{PR_DESCRIPTION}` and `{FILE_DIFFS}`, identify and list any *new* features, functionalities, or significant enhancements introduced.
+    * Present these as a bulleted list.
+    * If none are identified, state: "No new features identified."
+
+4.  **Bug Fixes:**
+    * Analyze `{FILE_DIFFS}` for the *addition* of exception handling mechanisms (e.g., new `try`/`catch`, specific error checks).
+    * List instances where such new exception handling was introduced.
+    * Present these as a bulleted list.
+    * Focus *only* on newly added exception/error handling for this section.
+    * If none are identified, state: "No new exception handling identified for bug fixes."
+
+---
+
+**Part 2: Coding Standards Violations**
+
+Generate a separate section titled "**Coding Standards Violations**".
+
+* Carefully review the rules defined in the `{CODING_STANDARDS_MD}` input.
+* Analyze the code additions and modifications within the `{FILE_DIFFS}` against these standards.
+* Identify any specific lines or blocks of code in the diffs that appear to violate the provided coding standards.
+* For each identified violation, provide a clear comment in a bulleted list format:
+    * **File:** `{File Path where violation occurred}`
+    * **Line(s):** `{Approximate line number(s) in the diff where violation occurred}`
+    * **Violation:** `{Brief description of the violated standard from the standards document}`
+    * **Code:**
+        ```code
+        {Relevant line(s) of code from the diff}
+        ```
+* If no violations are found after checking the diffs against the standards document, state: "No coding standards violations identified in the changed code."
+
+**Instructions:**
+
+* First, generate the complete "Summary" (Part 1) with its four sections in the specified order.
+* Then, insert a separator (`---`).
+* Finally, generate the complete "Coding Standards Violations" section (Part 2).
+* Base your analysis primarily on the provided `{FILE_DIFFS}` and `{CODING_STANDARDS_MD}`. Use `{PR_TITLE}` and `{PR_DESCRIPTION}` for context.
+* Format the "Changes" section in the Summary as a valid Markdown table.
+* Use bullet points for lists within "New Features", "Bug Fixes", and "Coding Standards Violations".
+* Be objective and specific, especially when detailing violations. Reference the standard and the code.
+* Do not include any preamble or concluding remarks outside the specified structure.
+
+**Generate the Summary and Coding Standards Violations now based on the provided inputs.**
+PROMPT_EOF
+
+          # Replace placeholders - Use environment variables for safety with multi-line content
+          prompt_content="$prompt_template"
+          prompt_content="${prompt_content//\{PR_TITLE\}/"$PR_TITLE"}"
+          prompt_content="${prompt_content//\{PR_DESCRIPTION\}/"$PR_DESCRIPTION"}"
+          prompt_content="${prompt_content//\{FILE_DIFFS\}/"$PR_DIFF_CONTENT"}"
+          prompt_content="${prompt_content//\{CODING_STANDARDS_MD\}/"$CODING_STANDARDS"}"
+
+          # Output the final prompt
+          echo "final_prompt<<EOF" >> $GITHUB_OUTPUT
+          echo "$prompt_content" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+        env:
+          PR_TITLE: ${{ steps.pr_metadata.outputs.pr_title }}
+          PR_DESCRIPTION: ${{ steps.pr_metadata.outputs.pr_description }}
+          PR_DIFF_CONTENT: ${{ steps.pr_diff.outputs.pr_diff_content }}
+          CODING_STANDARDS: ${{ steps.coding_standards.outputs.content }}
+
+      - name: Call Gemini API
+        id: call_gemini
+        # Continue even if this step fails, so we can potentially comment with an error
+        continue-on-error: true
+        run: |
+          # Check if API key is set
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
+            echo "GEMINI_API_KEY secret is not set." >&2
+            exit 1 # Fail the step explicitly
+          fi
+
+          # Prepare JSON payload
+          # Ensure the prompt is correctly escaped for JSON
+          json_prompt=$(jq -Rs '.' <<< "$FINAL_PROMPT")
+
+          # Construct the JSON payload using jq for robustness
+          payload=$(jq -n --arg prompt "$json_prompt" \
+            '{ "contents": [ { "parts": [ { "text": $prompt } ] } ] }')
+
+          # Call the Gemini API (using generateContent for general text models)
+          # Adjust API endpoint if using a specific version or model
+          api_endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${{ secrets.GEMINI_API_KEY }}"
+
+          response=$(curl -s -X POST "$api_endpoint" \
+            -H "Content-Type: application/json" \
+            -d "$payload")
+
+          # Check for curl errors
+          if [ $? -ne 0 ]; then
+            echo "curl command failed" >&2
+            exit 1
+          fi
+
+          # Check for API errors in the response
+          if echo "$response" | jq -e '.error' > /dev/null; then
+            echo "Gemini API returned an error:" >&2
+            echo "$response" | jq '.' >&2 # Print formatted error
+            exit 1
+          fi
+
+          # Extract the generated text content
+          # Adjust the jq path based on the actual Gemini API response structure
+          # Example assumes response format: { "candidates": [ { "content": { "parts": [ { "text": "..." } ] } } ] }
+          generated_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
+
+          if [ -z "$generated_text" ]; then
+            echo "Could not extract generated text from Gemini response:" >&2
+            echo "$response" | jq '.' >&2 # Print the full response for debugging
+            exit 1
+          fi
+
+          # Output the generated text
+          echo "gemini_response<<EOF" >> $GITHUB_OUTPUT
+          echo "$generated_text" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+        env:
+          FINAL_PROMPT: ${{ steps.prepare_prompt.outputs.final_prompt }}
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = ${{ steps.pr_metadata.outputs.pr_number }};
+            const geminiOutput = `${{ steps.call_gemini.outputs.gemini_response }}`;
+            const jobStatus = '${{ steps.call_gemini.outcome }}'; // 'success' or 'failure'
+
+            let commentBody = '';
+
+            if (jobStatus === 'failure') {
+              commentBody = `⚠️ **AI Review Failed**\n\nCould not generate AI review. Please check the workflow run logs for details.`;
+            } else if (!geminiOutput || geminiOutput.trim() === '') {
+              commentBody = `⚠️ **AI Review Warning**\n\nGemini API returned an empty response.`;
+            } else {
+              commentBody = `## 🤖 AI Pull Request Review\n\n${geminiOutput}`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: commentBody
+            });
