@@ -22,16 +22,16 @@ REQUEST_TIMEOUT = 180  # Increased timeout slightly
 
 # --- Prompt Template (Updated for JSON Output) ---
 PROMPT_TEMPLATE = """
-**Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards.
+**Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards. Your primary goal is to meticulously identify coding standard violations in Pull Request changes.
 
-**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate a single JSON object containing two main keys: "summary" and "violations".
+**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate a single JSON object containing two main keys: "summary" and "blockViolations". Your analysis must be thorough, aiming to identify *all* violations according to the provided standards. Pay *critical attention* to correctly identifying the line number in the *final* version of the file where each violation occurs.
 
 **Input:**
 
 1.  **PR Title:** {pr_title}
 2.  **Original PR Description:**
 {pr_description}
-3.  **File Diffs:**
+3.  **File Diffs (Unified Format):**
     ```diff
 {file_diffs}
     ```
@@ -67,26 +67,40 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
   "blockViolations": [ // Array of blockViolation objects.
     {{
       "file": "string", // Path to the violated file.
-      "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
+      "line": "integer", // **CRITICAL:** The EXACT line number in the file *after* the changes where the violation *primarily* occurs. MUST be an integer.
       "violations": [ // Array of strings describing the violation(s) in detail.
-        "string" // The rule being violated from the coding standards. Include the example from the coding standards if applicable.
-        // ... more violations
+        "string" // State the specific rule being violated from the coding standards. Include the example from the coding standards if relevant and helpful for context.
+        // ... more violations for the same line/block
     ]
     }}
-    // ... more blockViolation
+    // ... more blockViolation objects for other locations
   ] // If no blockViolation found, provide an empty array: []
 }}
-```
 
-**Instructions:**
-*   Strictly adhere to the JSON structure defined above.
-*   Ensure all string values are properly escaped within the JSON.
-*   The "line" field in violations MUST be an integer.
-*   The "line" field should point to the line number in the file where the violation occurs.
-*   Populate the fields based on your analysis of the PR title, description, diffs, and coding standards.
-*   Output *only* the JSON object.
+**Detailed Instructions & Analysis Strategy:**
 
-**Generate the JSON output now.**
+1.  **Understand the Goal:** First, understand the PR's overall purpose from the title, description, and the nature of the code changes.
+2.  **Parse the Diff:** Carefully analyze the `File Diffs`. Pay attention to:
+    *   Lines starting with `+`: These are added lines and are the primary target for finding new violations.
+    *   Lines starting with `-`: These are removed lines. Violations are generally *not* reported on removed lines, but they provide context for changes.
+    *   Lines starting with ` ` (space): These are context lines. A violation might occur on a context line if the *changes* around it make it violate a standard it previously didn't.
+    *   Hunk Headers (`@@ -old_start,old_count +new_start,new_count @@`): These are crucial for determining correct line numbers.
+3.  **Identify Violations - Be Meticulous:**
+    *   For *each rule* defined in the `Coding Standards`, systematically check *every added line (`+`)* and *relevant context line (` `)* in the diffs.
+    *   Do not stop after finding the first few violations; aim for *completeness*. Re-read the diffs and standards if necessary.
+    *   A single line might violate multiple rules. Include all applicable violations for that line within the `violations` array for that specific entry.
+4.  **Determine the Correct Line Number:**
+    *   **THIS IS CRITICAL:** When you identify a violation on a specific line within a diff hunk:
+        *   Identify the line number in the *new* version of the file.
+        *   Use the hunk header (`@@ ... +new_start,new_count ... @@`). `new_start` is the line number in the new file corresponding to the *first* line of the hunk (whether context, added, or deleted).
+        *   Count down from `new_start`, incrementing the line number *only* for lines starting with `+` or ` ` (space). Do *not* increment the count for lines starting with `-`.
+        *   The resulting number is the value for the `"line"` field in the JSON. It **must** correspond to the line number in the final state of the file after the PR is merged.
+        *   If a violation spans multiple lines, report the line number where the violation *starts* or is most prominent.
+5.  **Populate the JSON:**
+    *   Fill the `summary` object based on your understanding of the PR.
+    *   For each violation found, create a `blockViolation` object with the correct file path, the precisely calculated line number (as an integer), and a detailed description of the rule(s) violated.
+    *   Ensure the final output is *only* the JSON object, with no surrounding text or markdown formatting.
+    *   Ensure all string values within the JSON are correctly escaped.
 """
 
 # --- Helper Functions ---
