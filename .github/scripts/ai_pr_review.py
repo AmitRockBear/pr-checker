@@ -198,17 +198,27 @@ def main():
         sys.exit(1)
     # --- End Change ---
 
+    full_prompt = None  # Initialize variable
     try:
         # Pass the read content to build_prompt
         full_prompt = build_prompt(
             args.title, args.description, args.diff, standards_content
         )
-        review_comment = call_gemini_api(api_key, full_prompt)
-        print(review_comment)  # Output review comment to stdout
-
     except Exception as e:
-        print(f"Script failed during prompt building or API call: {e}", file=sys.stderr)
+        print(f"Script failed during prompt building: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Only proceed if prompt building was successful
+    if full_prompt:
+        try:
+            review_comment = call_gemini_api(api_key, full_prompt)
+            print(review_comment)  # Output review comment to stdout
+        except Exception as e:
+            # call_gemini_api already prints detailed errors and exits,
+            # but we catch here just in case something unexpected happens
+            # before or after the call within this try block.
+            print(f"Script failed during API call execution: {e}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
