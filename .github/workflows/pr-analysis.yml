@@ -25,8 +25,8 @@ jobs:
 
       - name: Run PR Analysis Script
         # Assuming your script is named pr_commenter.py and is in the root
-        # Adjust the path if necessary, e.g., ./scripts/pr_commenter.py
-        run: python ./pr_commenter.py
+        # Adjust the path if necessary, e.g., python ${{ github.workspace }}/.github/scripts/pr-check.py
+        run: python ${{ github.workspace }}/.github/scripts/pr-commenter.py
         env:
           # GITHUB_TOKEN is automatically provided with the right permissions
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
