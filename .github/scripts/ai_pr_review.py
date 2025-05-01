@@ -107,16 +107,9 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
     payload = json.dumps(
         {
             "contents": [{"parts": [{"text": prompt}]}],
-            # Optional: Add generation config for JSON output if needed,
-            # but prompt instruction is usually sufficient.
-            # "generationConfig": {
-            #     "responseMimeType": "application/json",
-            # }
-            # Optional: Add safety settings if needed
-            # "safetySettings": [
-            #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            #     # ... other categories
-            # ]
+            "generationConfig": {
+                "responseMimeType": "application/json",
+            },
         }
     )
     api_url = f"{GEMINI_API_ENDPOINT}?key={api_key}"
