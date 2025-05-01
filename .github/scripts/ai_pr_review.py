@@ -74,12 +74,12 @@ Generate a separate section titled "**Coding Standards Violations**".
 * Analyze the code additions and modifications within the `{file_diffs}` against these standards.
 * Identify any specific lines or blocks of code in the diffs that appear to violate the provided coding standards.
 * For each identified violation, provide a clear comment in a bulleted list format:
-    * **File:** `{File Path where violation occurred}`
-    * **Line(s):** `{Approximate line number(s) in the diff where violation occurred}`
-    * **Violation:** `{Brief description of the violated standard from the standards document}`
+    * **File:** `File Path where violation occurred`
+    * **Line(s):** `Approximate line number(s) in the diff where violation occurred`
+    * **Violation:** `Brief description of the violated standard from the standards document`
     * **Code:**
         ```code
-        {Relevant line(s) of code from the diff}
+        Relevant line(s) of code from the diff
         ```
 * If no violations are found after checking the diffs against the standards document, state: "No coding standards violations identified in the changed code."
 
