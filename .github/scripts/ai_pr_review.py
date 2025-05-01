@@ -13,20 +13,20 @@ from typing import Dict, Any, List, Optional, TypedDict
 class Violation(TypedDict):
     file: str
     line: int  # Target line number within the file
-    message: str  # The full violation message including code block
+    message: (
+        str  # The full violation message including code block (formatted for comment)
+    )
 
 
 # --- Configuration ---
 GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 REQUEST_TIMEOUT = 180  # Increased timeout slightly
 
-# --- Prompt Template (No changes needed here) ---
+# --- Prompt Template (Updated for JSON Output) ---
 PROMPT_TEMPLATE = """
 **Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards.
 
-**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate two distinct outputs structured EXACTLY as requested below:
-1.  A concise "Summary" section.
-2.  A "Coding Standards Violations" section.
+**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate a single JSON object containing two main keys: "summary" and "violations".
 
 **Input:**
 
@@ -44,54 +44,48 @@ PROMPT_TEMPLATE = """
 
 **Output Requirements:**
 
-**Part 1: PR Summary**
-Generate a response starting *exactly* with "**Summary**" on its own line, followed by the content containing these four sections:
+Generate **ONLY** a valid JSON object adhering *exactly* to the following structure. Do not include any text before or after the JSON object (e.g., no "```json" wrappers).
 
-1.  **Description:**
-    * Review the `{pr_description}` and analyze the code changes in `{file_diffs}`.
-    * Write a refined and concise description of the PR's purpose and the changes implemented.
-    * Ensure this description accurately reflects the overall contribution based on the code diffs.
-
-2.  **Changes:**
-    * Analyze `{file_diffs}` for modified files.
-    * Generate a Markdown table with columns "File Path" and "Change Summary".
-    * For each modified file, add a row summarizing the main purpose of changes (1-2 sentences).
-    * If no files changed, state: "No file changes detected."
-
-3.  **New Features:**
-    * Identify and list *new* features/enhancements from `{pr_description}` and `{file_diffs}` as a bulleted list.
-    * If none, state: "No new features identified."
-
-4.  **Bug Fixes:**
-    * Analyze `{file_diffs}` for *added* exception handling (e.g., new `try`/`catch`).
-    * List instances as a bulleted list.
-    * If none, state: "No new exception handling identified for bug fixes."
-
----
-**(Exactly one separator line like this)**
----
-
-**Part 2: Coding Standards Violations**
-Generate a section starting *exactly* with "**Coding Standards Violations**" on its own line.
-
-* Review rules in `{coding_standards_md}` against `{file_diffs}`.
-* Identify violations in additions/modifications.
-* For EACH violation, provide a bullet point `*` followed *exactly* by:
-    * **File:** `path/to/violated/file.ext` (Just the path)
-    * **Line(s):** `N` (A single line number in the changed file where the violation primarily occurs)
-    * **Violation:** `Brief description of the standard violated.`
-    * **Code:**
-        ```code
-        Relevant line(s) of code from the diff showing the violation
-        ```
-* If no violations are found, state *only*: "No coding standards violations identified in the changed code."
+```json
+{{
+  "summary": {{
+    "description": "string", // Refined, concise description of the PR's purpose and changes based on description and diffs.
+    "changes": [ // Array of objects, one per modified file.
+      {{
+        "filePath": "string", // Path of the modified file.
+        "changeSummary": "string" // 1-2 sentence summary of changes in this file.
+      }}
+      // ... more files
+    ], // If no files changed, provide an empty array: []
+    "newFeatures": [ // Array of strings describing new features/enhancements.
+      "string"
+      // ... more features
+    ], // If no new features, provide an empty array: []
+    "bugFixes": [ // Array of strings describing added exception handling.
+      "string" // e.g., "Added try/except block in file X for handling Y."
+      // ... more bug fixes
+    ] // If no new exception handling, provide an empty array: []
+  }},
+  "violations": [ // Array of violation objects.
+    {{
+      "file": "string", // Path to the violated file.
+      "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
+      "violation": "string", // Brief description of the standard violated.
+      "code": "string" // Relevant line(s) of code from the diff showing the violation.
+    }}
+    // ... more violations
+  ] // If no violations found, provide an empty array: []
+}}
+```
 
 **Instructions:**
-* Adhere strictly to the specified output structure and headers ("**Summary**", "**Coding Standards Violations**", `---` separator, bullet points, bolded fields).
-* Output only the requested sections, nothing else.
-* The "Line(s):" field MUST contain a single integer representing the line number in the file where the violation occurs.
+*   Strictly adhere to the JSON structure defined above.
+*   Ensure all string values are properly escaped within the JSON.
+*   The "line" field in violations MUST be an integer.
+*   Populate the fields based on your analysis of the PR title, description, diffs, and coding standards.
+*   Output *only* the JSON object.
 
-**Generate the structured Summary and Coding Standards Violations now.**
+**Generate the JSON output now.**
 """
 
 # --- Helper Functions ---
@@ -113,6 +107,11 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
     payload = json.dumps(
         {
             "contents": [{"parts": [{"text": prompt}]}],
+            # Optional: Add generation config for JSON output if needed,
+            # but prompt instruction is usually sufficient.
+            # "generationConfig": {
+            #     "responseMimeType": "application/json",
+            # }
             # Optional: Add safety settings if needed
             # "safetySettings": [
             #     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
@@ -141,10 +140,11 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
                     "Gemini API response missing 'candidates' field and no block reason found."
                 )
 
-        content = response_json["candidates"][0].get("content")
+        candidate = response_json["candidates"][0]
+        content = candidate.get("content")
         if not content or not content.get("parts"):
             # Check finish reason in candidate if available
-            finish_reason = response_json["candidates"][0].get("finishReason")
+            finish_reason = candidate.get("finishReason")
             if finish_reason and finish_reason != "STOP":
                 raise ValueError(
                     f"Gemini API candidate finished unexpectedly. Reason: {finish_reason}"
@@ -157,15 +157,29 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
         if generated_text is None:  # Check for None explicitly
             raise ValueError("Gemini API response missing 'text' field in part.")
 
-        return generated_text.strip()
+        # Clean potential markdown code block fences if the model adds them despite instructions
+        cleaned_text = re.sub(
+            r"^\s*```json\s*", "", generated_text.strip(), flags=re.IGNORECASE
+        )
+        cleaned_text = re.sub(r"\s*```\s*$", "", cleaned_text)
+
+        return cleaned_text
 
     except requests.exceptions.RequestException as e:
         print(f"Error calling Gemini API: {e}", file=sys.stderr)
-        # ... (rest of existing error handling) ...
+        # Add more specific error details if available from response
+        if "response" in locals() and response is not None:
+            print(f"Response status: {response.status_code}", file=sys.stderr)
+            print(f"Response body: {response.text}", file=sys.stderr)
         sys.exit(1)
     except (ValueError, KeyError, IndexError) as e:
         print(f"Error processing Gemini API response: {e}", file=sys.stderr)
-        # ... (rest of existing error handling) ...
+        # Add more specific error details if available from response_json
+        if "response_json" in locals() and response_json is not None:
+            print(
+                f"API Response JSON: {json.dumps(response_json, indent=2)}",
+                file=sys.stderr,
+            )
         sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
@@ -173,106 +187,92 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
 
 
 def parse_ai_response(response_text: str) -> Dict[str, Any]:
-    """Parses the AI's response into summary and violations."""
-    summary = ""
-    violations: List[Violation] = []
+    """Parses the AI's JSON response into summary and violations."""
+    summary_output = ""
+    violations_output: List[Violation] = []
+    parsed_json: Dict[str, Any] = {}
 
-    # Split based on the main sections and separator
-    parts = re.split(r"\n---\n", response_text, maxsplit=1)
+    try:
+        parsed_json = json.loads(response_text)
 
-    summary_section = ""
-    violations_section = ""
+        # --- Extract Summary ---
+        summary_data = parsed_json.get("summary", {})
+        description = summary_data.get("description", "No description provided.")
+        changes_list = summary_data.get("changes", [])
+        features_list = summary_data.get("newFeatures", [])
+        fixes_list = summary_data.get("bugFixes", [])
 
-    if len(parts) > 0:
-        # Find **Summary** reliably, handling potential leading/trailing whitespace
-        summary_match = re.search(
-            r"^\s*\*\*Summary\*\*\s*\n(.*?)$", parts[0], re.DOTALL | re.MULTILINE
-        )
-        if summary_match:
-            summary_section = summary_match.group(1).strip()
+        # Format summary into Markdown string
+        summary_parts = [f"**Description:**\n{description}\n"]
+
+        changes_table = "**Changes:**\n"
+        if changes_list:
+            changes_table += "| File Path | Change Summary |\n|---|---|\n"
+            for change in changes_list:
+                changes_table += f"| `{change.get('filePath', 'N/A')}` | {change.get('changeSummary', 'N/A')} |\n"
         else:
-            # Fallback: assume the first part is the summary if title is missing
-            print(
-                "Warning: Could not find '**Summary**' header. Assuming first part is summary.",
-                file=sys.stderr,
-            )
-            summary_section = parts[0].strip()
+            changes_table += "No file changes detected.\n"
+        summary_parts.append(changes_table)
 
-    if len(parts) > 1:
-        # Find **Coding Standards Violations** reliably
-        violations_match = re.search(
-            r"^\s*\*\*Coding Standards Violations\*\*\s*\n(.*?)$",
-            parts[1],
-            re.DOTALL | re.MULTILINE,
-        )
-        if violations_match:
-            violations_section = violations_match.group(1).strip()
+        features_section = "**New Features:**\n"
+        if features_list:
+            for feature in features_list:
+                features_section += f"* {feature}\n"
         else:
-            # Fallback: assume second part is violations if title missing
-            print(
-                "Warning: Could not find '**Coding Standards Violations**' header. Assuming second part is violations.",
-                file=sys.stderr,
-            )
-            violations_section = parts[1].strip()
+            features_section += "No new features identified.\n"
+        summary_parts.append(features_section)
 
-    # Set the summary (even if empty)
-    summary = summary_section
+        fixes_section = "**Bug Fixes:**\n"
+        if fixes_list:
+            for fix in fixes_list:
+                fixes_section += f"* {fix}\n"
+        else:
+            fixes_section += "No new exception handling identified for bug fixes.\n"
+        summary_parts.append(fixes_section)
 
-    # Check if violations section indicates no violations
-    no_violations_msg = "No coding standards violations identified in the changed code."
-    if violations_section and no_violations_msg in violations_section:
-        pass  # violations list remains empty
-    elif violations_section:
-        # Parse individual violations - improved regex
-        # Look for bullet points starting a violation block
-        violation_blocks = re.findall(
-            r"^\s*\*\s*(.*?)(?=\n\s*\*|\Z)",
-            violations_section,
-            re.DOTALL | re.MULTILINE,
-        )
+        summary_output = "\n".join(summary_parts)
 
-        for block in violation_blocks:
-            block = block.strip()
+        # --- Extract Violations ---
+        violations_data = parsed_json.get("violations", [])
+        for violation in violations_data:
             try:
-                file_match = re.search(r"\*\*File:\*\*\s*`?([^`\n]+)`?", block)
-                lines_match = re.search(
-                    r"\*\*Line\(s\):\*\*\s*`?(\d+)\b`?", block
-                )  # Expecting single integer
-                violation_match = re.search(
-                    r"\*\*Violation:\*\*\s*(.*?)(?=\n\s*\*\*Code:\*\*|\Z)",
-                    block,
-                    re.DOTALL,
-                )
-                code_match = re.search(
-                    r"\*\*Code:\*\*\s*\n```(?:code)?\n(.*?)\n```", block, re.DOTALL
-                )
+                file = violation.get("file")
+                line = violation.get("line")
+                violation_desc = violation.get("violation")
+                code_snippet = violation.get("code", "N/A")
 
-                if file_match and lines_match and violation_match:
-                    file = file_match.group(1).strip()
-                    line = int(lines_match.group(1).strip())
-                    violation_desc = violation_match.group(1).strip()
-                    code_snippet = code_match.group(1).strip() if code_match else "N/A"
-
-                    # Format the message for the comment body
+                if file and isinstance(line, int) and violation_desc:
+                    # Format the message for the GitHub comment body
                     message = (
                         f"**Violation:** {violation_desc}\n\n"
                         f"**Code:**\n```code\n{code_snippet}\n```"
                     )
-
-                    violations.append({"file": file, "line": line, "message": message})
+                    violations_output.append(
+                        {"file": file, "line": line, "message": message}
+                    )
                 else:
                     print(
-                        f"Warning: Could not parse violation block:\n---\n{block}\n---",
+                        f"Warning: Skipping violation due to missing/invalid fields: {violation}",
                         file=sys.stderr,
                     )
-
             except Exception as e:
                 print(
-                    f"Error parsing violation block: {e}\nBlock:\n---\n{block}\n---",
+                    f"Error processing individual violation: {e}\nViolation data: {violation}",
                     file=sys.stderr,
                 )
 
-    return {"summary": summary, "violations": violations}
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to decode AI response as JSON: {e}", file=sys.stderr)
+        print(f"Raw response received:\n---\n{response_text}\n---", file=sys.stderr)
+        # Return empty/default structure to avoid crashing downstream
+        return {"summary": "Error: Could not parse AI response.", "violations": []}
+    except Exception as e:
+        print(f"Error processing parsed JSON data: {e}", file=sys.stderr)
+        print(f"Parsed JSON: {parsed_json}", file=sys.stderr)
+        # Return empty/default structure
+        return {"summary": "Error: Could not process parsed AI data.", "violations": []}
+
+    return {"summary": summary_output, "violations": violations_output}
 
 
 # --- Main Execution ---
