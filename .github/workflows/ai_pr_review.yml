@@ -24,18 +24,22 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r .github/scripts/requirements.txt # Install from requirements file
+          # Ensure requirements file exists and is in the right place
+          if [ -f .github/scripts/requirements.txt ]; then
+            pip install -r .github/scripts/requirements.txt
+          else
+            echo "Error: .github/scripts/requirements.txt not found."
+            exit 1
+          fi
 
       - name: Get PR Metadata
         id: pr_metadata
         run: |
-          # Use a unique delimiter for title
           DELIMITER_TITLE=$(openssl rand -hex 16)
           echo "pr_title<<$DELIMITER_TITLE" >> $GITHUB_OUTPUT
           echo "${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
           echo "$DELIMITER_TITLE" >> $GITHUB_OUTPUT
 
-          # Use a unique delimiter for description
           DELIMITER_DESC=$(openssl rand -hex 16)
           pr_desc="${{ github.event.pull_request.body }}"
           if [[ -z "$pr_desc" ]]; then
@@ -50,7 +54,6 @@ jobs:
       - name: Get PR Diff
         id: pr_diff
         run: |
-          # Use a unique delimiter for the diff content
           DELIMITER_DIFF=$(openssl rand -hex 16)
           gh pr diff ${{ steps.pr_metadata.outputs.pr_number }} --repo ${{ github.repository }} > pr.diff || \
             echo "Failed to get diff using GitHub CLI." >&2
@@ -59,64 +62,66 @@ jobs:
             echo "pr_diff_content=No changes detected or diff could not be retrieved." >> $GITHUB_OUTPUT
           else
             echo "pr_diff_content<<$DELIMITER_DIFF" >> $GITHUB_OUTPUT
+            # Handle potential trailing newline issues with cat in this context
             cat pr.diff >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT # Add a newline just in case cat doesn't
             echo "$DELIMITER_DIFF" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load Coding Standards
+      # --- CHANGE: Simplify Load Coding Standards ---
+      - name: Check for Coding Standards File
         id: coding_standards
         run: |
-          # Use a unique delimiter for coding standards content
-          DELIMITER_STANDARDS=$(openssl rand -hex 16)
           standards_file=".github/CODING_STANDARDS.md" # Adjust path if needed
-          if [[ -f "$standards_file" ]]; then
-            echo "content<<$DELIMITER_STANDARDS" >> $GITHUB_OUTPUT
-            cat "$standards_file" >> $GITHUB_OUTPUT
-            echo "$DELIMITER_STANDARDS" >> $GITHUB_OUTPUT
-          else
-            # Use simple output if file not found, delimiter not needed
-            echo "content=Coding standards file not found at $standards_file." >> $GITHUB_OUTPUT
+          if [[ ! -f "$standards_file" ]]; then
+             echo "::error::Coding standards file not found at $standards_file."
+             exit 1 # Fail the job if standards file is mandatory and missing
           fi
+          # No need to output content anymore
+          echo "Standards file found at $standards_file"
 
+      # --- CHANGE: Pass file path to script ---
       - name: Run AI Review Python Script
-        id: run_script # Give the step an ID to access its outcome/output
-        continue-on-error: true # Allow workflow to proceed to commenting step even if script fails
+        id: run_script
+        continue-on-error: true
         run: |
-          # Execute the python script, passing data as arguments
-          # Using environment variables for arguments helps handle multi-line content safely
+          # Define the path to the standards file
+          STANDARDS_FILE_PATH=".github/CODING_STANDARDS.md"
+
+          # Execute the python script, passing path instead of content
           python .github/scripts/ai_pr_review.py \
             --title "$PR_TITLE" \
             --description "$PR_DESCRIPTION" \
             --diff "$PR_DIFF_CONTENT" \
-            --standards "$CODING_STANDARDS" \
-            > review_output.txt # Capture stdout to a file
+            --standards-file "$STANDARDS_FILE_PATH" \
+            > review_output.txt # Capture stdout
 
-          # Check the exit code of the python script
           script_exit_code=$?
           if [ $script_exit_code -ne 0 ]; then
-            echo "Python script failed with exit code $script_exit_code. Check stderr above." >&2
-            # Make the step fail explicitly (though continue-on-error is set)
+            echo "Python script failed with exit code $script_exit_code." >&2
+            # Optionally display captured stderr if python script writes it
+            # cat error_log.txt >&2
             exit 1
           fi
 
           # Save the script's stdout (the review comment) to GitHub Actions output
-          # Use a unique delimiter for the review comment
           DELIMITER_COMMENT=$(openssl rand -hex 16)
           echo "review_comment<<$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
-          # Ensure review_output.txt exists before catting
           if [[ -f "review_output.txt" ]]; then
              cat review_output.txt >> $GITHUB_OUTPUT
+             echo "" >> $GITHUB_OUTPUT # Add trailing newline
           fi
           echo "$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
         env:
-          # Pass secrets and potentially large inputs as environment variables
+          # GEMINI key is still needed by the script
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Pass other potentially multi-line outputs via env vars
           PR_TITLE: ${{ steps.pr_metadata.outputs.pr_title }}
           PR_DESCRIPTION: ${{ steps.pr_metadata.outputs.pr_description }}
           PR_DIFF_CONTENT: ${{ steps.pr_diff.outputs.pr_diff_content }}
-          CODING_STANDARDS: ${{ steps.coding_standards.outputs.content }}
+          # CODING_STANDARDS env var is no longer needed here
 
       - name: Comment on PR
         uses: actions/github-script@v7
@@ -124,14 +129,13 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const prNumber = ${{ steps.pr_metadata.outputs.pr_number }};
-            const reviewComment = `${{ steps.run_script.outputs.review_comment }}`; // Get stdout from python script step
-            const scriptOutcome = '${{ steps.run_script.outcome }}'; // Check if the python script step succeeded or failed
+            const reviewComment = `${{ steps.run_script.outputs.review_comment }}`;
+            const scriptOutcome = '${{ steps.run_script.outcome }}';
 
             let commentBody = '';
 
             if (scriptOutcome === 'failure') {
               commentBody = `⚠️ **AI Review Failed**\n\nCould not generate AI review. The review script encountered an error. Please check the workflow run logs for details.`;
-              // Consider adding stderr from the script if captured for more debug info
             } else if (!reviewComment || reviewComment.trim() === '') {
               commentBody = `⚠️ **AI Review Warning**\n\nGemini API returned an empty response or the review script produced no output.`;
             } else {
