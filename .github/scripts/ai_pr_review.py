@@ -101,6 +101,10 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
     *   For each violation found, create a `blockViolation` object with the correct file path, the precisely calculated line number (as an integer), and a detailed description of the rule(s) violated.
     *   Ensure the final output is *only* the JSON object, with no surrounding text or markdown formatting.
     *   Ensure all string values within the JSON are correctly escaped.
+    *   Ensure the JSON is valid and well-formed.
+    *   Ensure the JSON DOES NOT contain invalid escape character in strings (e.g., `\n` should be `\\n`).
+    *   Ensure the JSON does not contain any trailing commas.
+    *   Ensure the JSON does not contain any unnecessary whitespace or formatting.
 """
 
 # --- Helper Functions ---
