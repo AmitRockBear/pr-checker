@@ -13,9 +13,7 @@ from typing import Dict, Any, List, Optional, TypedDict
 class Violation(TypedDict):
     file: str
     line: int  # Target line number within the file
-    message: (
-        str  # The full violation message including code block (formatted for comment)
-    )
+    message: str  # The full violation message including fixSuggestion block (formatted for comment)
 
 
 # --- Configuration ---
@@ -71,6 +69,7 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
       "file": "string", // Path to the violated file.
       "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
       "violation": "string", // Brief description of the standard violated.
+      "fixSuggestion": "string" // Relevant line(s) of code that will effectively fix the violation. This should be a code block formatted as a string.
     }}
     // ... more violations
   ] // If no violations found, provide an empty array: []
@@ -231,13 +230,13 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
                 file = violation.get("file")
                 line = violation.get("line")
                 violation_desc = violation.get("violation")
-                code_snippet = violation.get("code", "N/A")
+                fix_suggestion_code_snippet = violation.get("fixSuggestion", "N/A")
 
                 if file and isinstance(line, int) and violation_desc:
                     # Format the message for the GitHub comment body
                     message = (
                         f"**Violation:** {violation_desc}\n\n"
-                        f"**Code:**\n```code\n{code_snippet}\n```"
+                        f"**Fix Suggestion:**\n```code\n{fix_suggestion_code_snippet}\n```"
                     )
                     violations_output.append(
                         {"file": file, "line": line, "message": message}
