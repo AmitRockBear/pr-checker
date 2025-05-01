@@ -29,32 +29,38 @@ jobs:
       - name: Get PR Metadata
         id: pr_metadata
         run: |
-          echo "pr_title<<EOF" >> $GITHUB_OUTPUT
+          # Use a unique delimiter for title
+          DELIMITER_TITLE=$(openssl rand -hex 16)
+          echo "pr_title<<$DELIMITER_TITLE" >> $GITHUB_OUTPUT
           echo "${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "$DELIMITER_TITLE" >> $GITHUB_OUTPUT
 
+          # Use a unique delimiter for description
+          DELIMITER_DESC=$(openssl rand -hex 16)
           pr_desc="${{ github.event.pull_request.body }}"
           if [[ -z "$pr_desc" ]]; then
             pr_desc="No description provided."
           fi
-          echo "pr_description<<EOF" >> $GITHUB_OUTPUT
+          echo "pr_description<<$DELIMITER_DESC" >> $GITHUB_OUTPUT
           echo "$pr_desc" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "$DELIMITER_DESC" >> $GITHUB_OUTPUT
 
           echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
       - name: Get PR Diff
         id: pr_diff
         run: |
+          # Use a unique delimiter for the diff content
+          DELIMITER_DIFF=$(openssl rand -hex 16)
           gh pr diff ${{ steps.pr_metadata.outputs.pr_number }} --repo ${{ github.repository }} > pr.diff || \
             echo "Failed to get diff using GitHub CLI." >&2
 
           if [ ! -s pr.diff ]; then
             echo "pr_diff_content=No changes detected or diff could not be retrieved." >> $GITHUB_OUTPUT
           else
-            echo "pr_diff_content<<EOF" >> $GITHUB_OUTPUT
+            echo "pr_diff_content<<$DELIMITER_DIFF" >> $GITHUB_OUTPUT
             cat pr.diff >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "$DELIMITER_DIFF" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,12 +68,15 @@ jobs:
       - name: Load Coding Standards
         id: coding_standards
         run: |
+          # Use a unique delimiter for coding standards content
+          DELIMITER_STANDARDS=$(openssl rand -hex 16)
           standards_file=".github/CODING_STANDARDS.md" # Adjust path if needed
           if [[ -f "$standards_file" ]]; then
-            echo "content<<EOF" >> $GITHUB_OUTPUT
+            echo "content<<$DELIMITER_STANDARDS" >> $GITHUB_OUTPUT
             cat "$standards_file" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "$DELIMITER_STANDARDS" >> $GITHUB_OUTPUT
           else
+            # Use simple output if file not found, delimiter not needed
             echo "content=Coding standards file not found at $standards_file." >> $GITHUB_OUTPUT
           fi
 
@@ -85,17 +94,22 @@ jobs:
             > review_output.txt # Capture stdout to a file
 
           # Check the exit code of the python script
-          if [ $? -ne 0 ]; then
-            echo "Python script failed. Check stderr above." >&2
-            # Optionally, output stderr if captured: cat error.log >&2
+          script_exit_code=$?
+          if [ $script_exit_code -ne 0 ]; then
+            echo "Python script failed with exit code $script_exit_code. Check stderr above." >&2
             # Make the step fail explicitly (though continue-on-error is set)
             exit 1
           fi
 
           # Save the script's stdout (the review comment) to GitHub Actions output
-          echo "review_comment<<EOF" >> $GITHUB_OUTPUT
-          cat review_output.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Use a unique delimiter for the review comment
+          DELIMITER_COMMENT=$(openssl rand -hex 16)
+          echo "review_comment<<$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
+          # Ensure review_output.txt exists before catting
+          if [[ -f "review_output.txt" ]]; then
+             cat review_output.txt >> $GITHUB_OUTPUT
+          fi
+          echo "$DELIMITER_COMMENT" >> $GITHUB_OUTPUT
         env:
           # Pass secrets and potentially large inputs as environment variables
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
