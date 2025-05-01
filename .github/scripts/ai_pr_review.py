@@ -40,12 +40,12 @@ PROMPT_TEMPLATE = """
 Generate a response titled "**Summary**" containing the following four sections precisely as described:
 
 1.  **Description:**
-    * Review the `{PR_DESCRIPTION}` and analyze the code changes in `{FILE_DIFFS}`.
+    * Review the `{pr_description}` and analyze the code changes in `{file_diffs}`.
     * Write a refined and concise description of the PR's purpose and the changes implemented. Synthesize the original intent with the actual code changes.
     * Ensure this description accurately reflects the overall contribution of the PR based on the code diffs.
 
 2.  **Changes:**
-    * Analyze the `{FILE_DIFFS}` to identify all files that have been modified.
+    * Analyze the `{file_diffs}` to identify all files that have been modified.
     * Generate a Markdown table with exactly two columns: "File Path" and "Change Summary".
     * For each modified file, create a row in the table:
         * The "File Path" column should contain the full path of the modified file.
@@ -54,12 +54,12 @@ Generate a response titled "**Summary**" containing the following four sections 
     * If no files were changed, state: "No file changes detected."
 
 3.  **New Features:**
-    * Based on the `{PR_DESCRIPTION}` and `{FILE_DIFFS}`, identify and list any *new* features, functionalities, or significant enhancements introduced.
+    * Based on the `{pr_description}` and `{file_diffs}`, identify and list any *new* features, functionalities, or significant enhancements introduced.
     * Present these as a bulleted list.
     * If none are identified, state: "No new features identified."
 
 4.  **Bug Fixes:**
-    * Analyze `{FILE_DIFFS}` for the *addition* of exception handling mechanisms (e.g., new `try`/`catch`, specific error checks).
+    * Analyze `{file_diffs}` for the *addition* of exception handling mechanisms (e.g., new `try`/`catch`, specific error checks).
     * List instances where such new exception handling was introduced.
     * Present these as a bulleted list.
     * Focus *only* on newly added exception/error handling for this section.
@@ -70,8 +70,8 @@ Generate a response titled "**Summary**" containing the following four sections 
 **Part 2: Coding Standards Violations**
 Generate a separate section titled "**Coding Standards Violations**".
 
-* Carefully review the rules defined in the `{CODING_STANDARDS_MD}` input.
-* Analyze the code additions and modifications within the `{FILE_DIFFS}` against these standards.
+* Carefully review the rules defined in the `{coding_standards_md}` input.
+* Analyze the code additions and modifications within the `{file_diffs}` against these standards.
 * Identify any specific lines or blocks of code in the diffs that appear to violate the provided coding standards.
 * For each identified violation, provide a clear comment in a bulleted list format:
     * **File:** `{File Path where violation occurred}`
@@ -88,7 +88,7 @@ Generate a separate section titled "**Coding Standards Violations**".
 * First, generate the complete "Summary" (Part 1) with its four sections in the specified order.
 * Then, insert a separator (`---`).
 * Finally, generate the complete "Coding Standards Violations" section (Part 2).
-* Base your analysis primarily on the provided `{FILE_DIFFS}` and `{CODING_STANDARDS_MD}`. Use `{PR_TITLE}` and `{PR_DESCRIPTION}` for context.
+* Base your analysis primarily on the provided `{file_diffs}` and `{coding_standards_md}`. Use `{pr_title}` and `{pr_description}` for context.
 * Format the "Changes" section in the Summary as a valid Markdown table.
 * Use bullet points for lists within "New Features", "Bug Fixes", and "Coding Standards Violations".
 * Be objective and specific, especially when detailing violations. Reference the standard and the code.
@@ -196,7 +196,6 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
-    # --- End Change ---
 
     full_prompt = None  # Initialize variable
     try:
