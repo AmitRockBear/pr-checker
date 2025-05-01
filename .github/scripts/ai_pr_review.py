@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional, TypedDict
 
 
 # --- Type Hinting for Violations ---
-class Violation(TypedDict):
+class BlockViolation(TypedDict):
     file: str
     line: int  # Target line number within the file
     message: str  # The full violation message including fixSuggestion block (formatted for comment)
@@ -64,14 +64,17 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
       // ... more bug fixes
     ] // If no new exception handling, provide an empty array: []
   }},
-  "violations": [ // Array of violation objects.
+  "blockViolations": [ // Array of blockViolation objects.
     {{
       "file": "string", // Path to the violated file.
       "line": integer, // Single line number in the changed file where the violation primarily occurs. MUST be an integer.
-      "violation": "string", // The rule being violated from the coding standards. Include the example from the coding standards if applicable."
+      "violations": [ // Array of strings describing the violation(s) in detail.
+        "string" // The rule being violated from the coding standards. Include the example from the coding standards if applicable.
+        // ... more violations
+    ]
     }}
-    // ... more violations
-  ] // If no violations found, provide an empty array: []
+    // ... more blockViolation
+  ] // If no blockViolation found, provide an empty array: []
 }}
 ```
 
@@ -79,6 +82,7 @@ Generate **ONLY** a valid JSON object adhering *exactly* to the following struct
 *   Strictly adhere to the JSON structure defined above.
 *   Ensure all string values are properly escaped within the JSON.
 *   The "line" field in violations MUST be an integer.
+*   The "line" field should point to the line number in the file where the violation occurs.
 *   Populate the fields based on your analysis of the PR title, description, diffs, and coding standards.
 *   Output *only* the JSON object.
 
@@ -179,7 +183,7 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
 def parse_ai_response(response_text: str) -> Dict[str, Any]:
     """Parses the AI's JSON response into summary and violations."""
     summary_output = ""
-    violations_output: List[Violation] = []
+    violations_output: List[BlockViolation] = []
     parsed_json: Dict[str, Any] = {}
 
     try:
@@ -223,27 +227,28 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
         summary_output = "\n".join(summary_parts)
 
         # --- Extract Violations ---
-        violations_data = parsed_json.get("violations", [])
-        for violation in violations_data:
+        block_violations_data = parsed_json.get("blockViolations", [])
+        for block_violation in block_violations_data:
             try:
-                file = violation.get("file")
-                line = violation.get("line")
-                violation_desc = violation.get("violation")
+                file = block_violation.get("file")
+                line = block_violation.get("line")
+                violations_desc = block_violation.get("violations", [])
 
-                if file and isinstance(line, int) and violation_desc:
+                if file and isinstance(line, int) and violations_desc:
                     # Format the message for the GitHub comment body
-                    message = f"**Violation:** {violation_desc}\n\n"
+                    # Create a message by joining the violations and separating them with newlines
+                    message = "\n".join(violations_desc)
                     violations_output.append(
                         {"file": file, "line": line, "message": message}
                     )
                 else:
                     print(
-                        f"Warning: Skipping violation due to missing/invalid fields: {violation}",
+                        f"Warning: Skipping violation due to missing/invalid fields: {block_violation}",
                         file=sys.stderr,
                     )
             except Exception as e:
                 print(
-                    f"Error processing individual violation: {e}\nViolation data: {violation}",
+                    f"Error processing individual violation: {e}\nViolation data: {block_violation}",
                     file=sys.stderr,
                 )
 
