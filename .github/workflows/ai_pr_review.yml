@@ -125,26 +125,55 @@ jobs:
 
       - name: Comment on PR
         uses: actions/github-script@v7
+        # --- Add env block ---
+        env:
+          # Pass the potentially problematic output as an environment variable
+          REVIEW_COMMENT_BODY: ${{ steps.run_script.outputs.review_comment }}
+          SCRIPT_OUTCOME: ${{ steps.run_script.outcome }} # Pass outcome too if needed inside script
+          PR_NUMBER: ${{ steps.pr_metadata.outputs.pr_number }}
+        # --- End env block ---
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = ${{ steps.pr_metadata.outputs.pr_number }};
-            const reviewComment = `${{ steps.run_script.outputs.review_comment }}`;
-            const scriptOutcome = '${{ steps.run_script.outcome }}';
+            // Retrieve values from environment variables
+            const prNumber = process.env.PR_NUMBER;
+            const reviewComment = process.env.REVIEW_COMMENT_BODY || ''; // Default to empty string if unset
+            const scriptOutcome = process.env.SCRIPT_OUTCOME;
+
+            // Ensure prNumber is treated as a number if needed by the API call
+            const issueNumber = parseInt(prNumber, 10);
+            if (isNaN(issueNumber)) {
+              console.error("Error: Invalid PR Number:", prNumber);
+              process.exit(1); // Exit if PR number is invalid
+            }
 
             let commentBody = '';
 
             if (scriptOutcome === 'failure') {
               commentBody = `⚠️ **AI Review Failed**\n\nCould not generate AI review. The review script encountered an error. Please check the workflow run logs for details.`;
             } else if (!reviewComment || reviewComment.trim() === '') {
+              // Check the trimmed value from the environment variable
               commentBody = `⚠️ **AI Review Warning**\n\nGemini API returned an empty response or the review script produced no output.`;
             } else {
+              // Safely use the comment body from the environment variable
               commentBody = `## 🤖 AI Pull Request Review\n\n${reviewComment}`;
             }
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: commentBody
-            });
+            // Check if commentBody is unexpectedly long (optional sanity check)
+            // if (commentBody.length > 65535) { // GitHub comment limit
+            //   console.warn("Warning: Comment body exceeds GitHub limit, may be truncated.");
+            //   commentBody = commentBody.substring(0, 65500) + "\n... (truncated)";
+            // }
+
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber, // Use the parsed number
+                body: commentBody
+              });
+            } catch (error) {
+               console.error("Error posting comment:", error);
+               // Re-throw or exit to ensure the workflow step fails clearly
+               throw error;
+            }
