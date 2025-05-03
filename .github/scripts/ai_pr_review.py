@@ -44,7 +44,7 @@ You are an expert AI assistant specializing in code review, analysis, and adhere
     "description": "string",
     "changes": [ // Array of objects, one per modified file.
       {{
-        "filePath": "string",
+        "fileName": "string",   // The name of the file. DO NOT INCLUDE THE WHOLE PATH. For example, for a change in file with path '/a/b/c/d/code.py' the value should be 'code.py'
         "changeSummary": "string" 
       }}
       // ... more files
@@ -74,7 +74,7 @@ You are an expert AI assistant specializing in code review, analysis, and adhere
 
 2. Generate a Description for the Pull Request: Provide a concise, refined explanation of the PR’s purpose and changes. Use insights from the PR's Title, Description, FileDiffs. The description should consist of 20-80 words and no more than 80 words. The output should be under the JSON key 'summary.description'.
 
-3. Generate change summaries for the pull request: Go over the Pull Request and for each file modified (you can find this information under FileDiffs). Analyze the changes and provide a concise description of key changes made in that file. The description should consist of 20-80 words and no more than 80 words. The output should be an array of JSON objects of the structure {{ filePath: String, changeSummary: String }}, one object for every modified file. If there are no changes, return an empty array []. The output should be under the JSON key 'summary.changes'.
+3. Generate change summaries for the pull request: Go over the Pull Request and for each file modified (you can find this information under FileDiffs). Analyze the changes and provide a concise description of key changes made in that file. The description should consist of 20-80 words and no more than 80 words. The output should be an array of JSON objects of the structure {{ fileName: String, changeSummary: String }}, one object for every modified file. If there are no changes, return an empty array []. The output should be under the JSON key 'summary.changes'.
 
 4. Generate new features summaries for the pull request: Identify any new features or enhancements added in the PR (e.g. New components or modules, new endpoints or APIs, new configuration or environment options, new user interactions or UI behavior, database schema additions, business logic additions, feature flags, tests for new functionality). Analyze the new feature and provide a concise description of the feature. The description should consist of 20-80 words and no more than 80 words. The output should be an array of String, one for each new feature. If there are no new features, return an empty array []. The output should be under the JSON key 'summary.newFeatures'.
 
@@ -207,7 +207,7 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
         if changes_list:
             changes_table += "| File Path | Change Summary |\n|---|---|\n"
             for change in changes_list:
-                changes_table += f"| `{change.get('filePath', 'N/A')}` | {change.get('changeSummary', 'N/A')} |\n"
+                changes_table += f"| `{change.get('fileName', 'N/A')}` | {change.get('changeSummary', 'N/A')} |\n"
         else:
             changes_table += "No file changes detected.\n"
         summary_parts.append(changes_table)
