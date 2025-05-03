@@ -281,7 +281,7 @@ jobs:
                    line: violation.line // Line number in the file *after* the changes
                  });
                  // Optional: Add a small delay if rate limits become an issue
-                 await new Promise(resolve => setTimeout(resolve, 500));
+                 await new Promise(resolve => setTimeout(resolve, 2000));
               } catch (error) {
                  // Log specific error but continue trying other comments
                  console.error(`Failed to post comment for violation on ${violation.file}:${violation.line}. Error: ${error}`);
