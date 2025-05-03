@@ -279,11 +279,9 @@ jobs:
                    commit_id: headSha, // Commit SHA where change exists
                    path: violation.file, // File path relative to repo root
                    line: violation.line, // Line number in the file *after* the changes
-                   // side: 'RIGHT', // Typically comment on the changed side
-                   // start_line: can be used with line for multi-line comments if needed
+                   side: 'RIGHT', // Typically comment on the changed side
                  });
-                 // Optional: Add a small delay if rate limits become an issue
-                 // await new Promise(resolve => setTimeout(resolve, 500));
+                 await new Promise(resolve => setTimeout(resolve, 500));
               } catch (error) {
                  // Log specific error but continue trying other comments
                  console.error(`Failed to post comment for violation on ${violation.file}:${violation.line}. Error: ${error}`);
