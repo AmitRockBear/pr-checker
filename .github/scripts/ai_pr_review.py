@@ -22,89 +22,74 @@ REQUEST_TIMEOUT = 180  # Increased timeout slightly
 
 # --- Prompt Template (Updated for JSON Output) ---
 PROMPT_TEMPLATE = """
-**Role:** You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards. Your primary goal is to meticulously identify coding standard violations in Pull Request changes.
+<Role>
+You are an expert AI assistant specializing in code review, analysis, and adherence to coding standards. Your primary goal is to meticulously identify coding standard violations in Pull Request changes.
+</Role>
 
-**Task:** Analyze the provided Pull Request (PR) details (title, description, file diffs) and a set of coding standards. Generate a single JSON object containing two main keys: "summary" and "blockViolations". Your analysis must be thorough, aiming to identify *all* violations according to the provided standards. Pay *critical attention* to correctly identifying the line number in the *final* version of the file where each violation occurs.
+<Input>
+    <PullRequest>
+        <Title>{pr_title}</Title>
+        <Description>{pr_description}</Description>
+        <FileDiffs>
+            {file_diffs}
+        </FileDiffs>
+        {coding_standards_md}
+    </PullRequest>
+</Input>
 
-**Input:**
 
-1.  **PR Title:** {pr_title}
-2.  **Original PR Description:**
-{pr_description}
-3.  **File Diffs (Unified Format):**
-    ```diff
-{file_diffs}
-    ```
-4.  **Coding Standards (Markdown Content):**
-    ```markdown
-{coding_standards_md}
-    ```
-
-**Output Requirements:**
-
-Generate **ONLY** a valid JSON object adhering *exactly* to the following structure. Do not include any text before or after the JSON object (e.g., no "```json" wrappers).
-
-```json
-{{
+<Output>
+{
   "summary": {{
-    "description": "string", // Refined, concise description of the PR's purpose and changes based on description and diffs.
+    "description": "string",
     "changes": [ // Array of objects, one per modified file.
-      {{
-        "filePath": "string", // Path of the modified file.
-        "changeSummary": "string" // 1-2 sentence summary of changes in this file.
-      }}
+      {
+        "filePath": "string",
+        "changeSummary": "string" 
+      }
       // ... more files
     ], // If no files changed, provide an empty array: []
     "newFeatures": [ // Array of strings describing new features/enhancements.
       "string"
       // ... more features
     ], // If no new features, provide an empty array: []
-    "bugFixes": [ // Array of strings describing added exception handling.
-      "string" // e.g., "Added try/except block in file X for handling Y."
-      // ... more bug fixes
-    ] // If no new exception handling, provide an empty array: []
   }},
   "blockViolations": [ // Array of blockViolation objects.
-    {{
-      "file": "string", // Path to the violated file.
-      "line": "integer", // **CRITICAL:** The EXACT line number in the file *after* the changes where the violation *primarily* occurs. MUST be an integer.
-      "violations": [ // Array of strings describing the violation(s) in detail.
+    {
+        "file": "string", // Path to the violated file in which the line added is in.
+        "line": "integer", // **CRITICAL:** The EXACT line number in the file *after* the changes where the violation *primarily* occurs. MUST be an integer.
+        "violations": [ // Array of strings describing the violation(s) in  detail of a specific line.
+            "string" // State the specific rule being violated from the coding standards. Include the example from the coding standards if relevant and helpful for context.
+            // ... more violations for the same line/block
+        ]
+    }
+    // ... more blockViolation objects for other locations
+  ] // If no blockViolation found, provide an empty array: []
+}
+</Output>
+
+<Instructions>
+
+1. Analyze the provided Pull Request (PR) details (Title, Description, FileDiffs) and CodingStandards Rules. The input can be found above under the Input xml element.
+
+2. Generate a Description for the Pull Request: Provide a concise, refined explanation of the PR’s purpose and changes. Use insights from the PR's Title, Description, FileDiffs. The description should consist of 20-80 words and no more than 80 words. The output should be under the JSON key 'summary.description'.
+
+3. Generate change summaries for the pull request: Go over the Pull Request and for each file modified (you can find this information under FileDiffs). Analyze the changes and provide a concise description of key changes made in that file. The description should consist of 20-80 words and no more than 80 words. The output should be an array of JSON objects of the structure { filePath: String, changeSummary: String }, one object for every modified file. If there are no changes, return an empty array []. The output should be under the JSON key 'summary.changes'.
+
+4. Generate new features summaries for the pull request: Identify any new features or enhancements added in the PR (e.g. New components or modules, new endpoints or APIs, new configuration or environment options, new user interactions or UI behavior, database schema additions, business logic additions, feature flags, tests for new functionality). Analyze the new feature and provide a concise description of the feature. The description should consist of 20-80 words and no more than 80 words. The output should be an array of String, one for each new feature. If there are no new features, return an empty array []. The output should be under the JSON key 'summary.newFeatures'.
+
+5. Generate blockViolations of CodingStandards for the pull request: For each line of code added in the Pull Request (lines starting with `+`, These are added lines), GO OVER ALL the CodingStandards Rules (every rule has a special <Rule_X> tag where X represents a number starting from 1. Each rule consists of <Description_X>, <BadCodeExample_X>, <GoodCodeExample_X> tags, X is a numbering that matches the numbering of <Rule_X>, the <Description_X> describes the rule we call it the 'rule's description', <BadCodeExample_X> consists of a code example that violates the the 'rule's description', <GoodCodeExample_X> consists of a code example that follows the 'rule's description') and report ALL the violations (rules the line added does not follow) these added line introduces. Feel free to use the rule's code examples. Your analysis must be thorough, aiming to identify *all* violations according to the provided CodingStandards. Pay *critical attention* to correctly identifying the line number in the *final* version of the file where each violation occurs. The output should be a an array of JSON objects (one for each new line added where a violation has occured) of the structure 
+{
+    "file": "string", // Path to the violated file in which the line added is in.
+    "line": "integer", // **CRITICAL:** The EXACT line number in the file *after* the changes where the violation *primarily* occurs. MUST be an integer.
+    "violations": [ // Array of strings describing the violation(s) in  detail of a specific line.
         "string" // State the specific rule being violated from the coding standards. Include the example from the coding standards if relevant and helpful for context.
         // ... more violations for the same line/block
     ]
-    }}
-    // ... more blockViolation objects for other locations
-  ] // If no blockViolation found, provide an empty array: []
-}}
+}
+6. Go over the results generated in instructions 2, 3, 4, 5 and generate an output according to the output schema provided above under the Output xml element. When generating the output make sure to generate **ONLY** a valid JSON object adhering *exactly* to the Output structure. Do not include any text before or after the JSON object (e.g., no "```json" wrappers).
 
-**Detailed Instructions & Analysis Strategy:**
-
-1.  **Understand the Goal:** First, understand the PR's overall purpose from the title, description, and the nature of the code changes.
-2.  **Parse the Diff:** Carefully analyze the `File Diffs`. Pay attention to:
-    *   Lines starting with `+`: These are added lines and are the primary target for finding new violations.
-    *   Lines starting with `-`: These are removed lines. Violations are generally *not* reported on removed lines, but they provide context for changes.
-    *   Lines starting with ` ` (space): These are context lines. A violation might occur on a context line if the *changes* around it make it violate a standard it previously didn't.
-    *   Hunk Headers (`@@ -old_start,old_count +new_start,new_count @@`): These are crucial for determining correct line numbers.
-3.  **Identify Violations - Be Meticulous:**
-    *   For *each rule* defined in the `Coding Standards`, systematically check *every added line (`+`)* and *relevant context line (` `)* in the diffs.
-    *   Do not stop after finding the first few violations; aim for *completeness*. Re-read the diffs and standards if necessary.
-    *   A single line might violate multiple rules. Include all applicable violations for that line within the `violations` array for that specific entry.
-4.  **Determine the Correct Line Number:**
-    *   **THIS IS CRITICAL:** When you identify a violation on a specific line within a diff hunk:
-        *   Identify the line number in the *new* version of the file.
-        *   Use the hunk header (`@@ ... +new_start,new_count ... @@`). `new_start` is the line number in the new file corresponding to the *first* line of the hunk (whether context, added, or deleted).
-        *   Count down from `new_start`, incrementing the line number *only* for lines starting with `+` or ` ` (space). Do *not* increment the count for lines starting with `-`.
-        *   The resulting number is the value for the `"line"` field in the JSON. It **must** correspond to the line number in the final state of the file after the PR is merged.
-        *   If a violation spans multiple lines, report the line number where the violation *starts* or is most prominent.
-5.  **Populate the JSON:**
-    *   Fill the `summary` object based on your understanding of the PR.
-    *   For each violation found, create a `blockViolation` object with the correct file path, the precisely calculated line number (as an integer), and a detailed description of the rule(s) violated.
-    *   Ensure the final output is *only* the JSON object, with no surrounding text or markdown formatting.
-    *   Ensure all string values within the JSON are correctly escaped.
-    *   Ensure the JSON is valid and well-formed.
-    *   Ensure the JSON DOES NOT contain invalid escape character in strings (e.g., `\n` should be `\\n`).
-    *   Ensure the JSON does not contain any trailing commas.
-    *   Ensure the JSON does not contain any unnecessary whitespace or formatting.
+</Instructions>
 """
 
 # --- Helper Functions ---
