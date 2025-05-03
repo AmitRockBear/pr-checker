@@ -278,9 +278,9 @@ jobs:
                    body: commentBody.substring(0, 65535),
                    commit_id: headSha, // Commit SHA where change exists
                    path: violation.file, // File path relative to repo root
-                   line: violation.line, // Line number in the file *after* the changes
-                   side: 'RIGHT', // Typically comment on the changed side
+                   line: violation.line // Line number in the file *after* the changes
                  });
+                 // Optional: Add a small delay if rate limits become an issue
                  await new Promise(resolve => setTimeout(resolve, 500));
               } catch (error) {
                  // Log specific error but continue trying other comments
