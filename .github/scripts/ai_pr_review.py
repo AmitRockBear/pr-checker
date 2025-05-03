@@ -114,8 +114,7 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
         {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "responseMimeType": "application/json",
-                "maxOutputTokens": 8192,
+                "responseMimeType": "application/json"
             },
         }
     )
