@@ -18,7 +18,7 @@ class BlockViolation(TypedDict):
 
 # --- Configuration ---
 GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent"
-REQUEST_TIMEOUT = 180  # Increased timeout slightly
+REQUEST_TIMEOUT = 600  # Increased timeout slightly
 
 # --- Prompt Template (Updated for JSON Output) ---
 PROMPT_TEMPLATE = """
