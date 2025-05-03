@@ -1007,4 +1007,16 @@ const processTransition = transition => {
 };
     </GoodCodeExample_39>
   </Rule_39>
+
+  <Rule_40 title="Comparison">
+    <Description_40>
+      Comparisons should use === instead of ==.
+    </Description_40>
+    <BadCodeExample_40>
+      temp == x
+    </BadCodeExample_40>
+    <GoodCodeExample_40>
+      temp === x
+    </GoodCodeExample_40>
+  </Rule_40>
 </CodingStandards>
