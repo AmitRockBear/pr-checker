@@ -80,7 +80,7 @@ jobs:
       - name: Check for Coding Standards File
         id: coding_standards
         run: |
-          standards_file=".github/CODING_STANDARDS.md" # Adjust path if needed
+          standards_file=".github/CODING_STANDARDS.txt" # Adjust path if needed
           if [[ ! -f "$standards_file" ]]; then
              echo "::error::Coding standards file not found at $standards_file." ; exit 1
           fi
