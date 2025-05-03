@@ -197,7 +197,7 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
         description = summary_data.get("description", "No description provided.")
         changes_list = summary_data.get("changes", [])
         features_list = summary_data.get("newFeatures", [])
-        fixes_list = summary_data.get("bugFixes", [])
+        # fixes_list = summary_data.get("bugFixes", [])
 
         # Format summary into Markdown string
         summary_parts = [f"**Description:**\n{description}\n"]
@@ -219,13 +219,13 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
             features_section += "No new features identified.\n"
         summary_parts.append(features_section)
 
-        fixes_section = "**Bug Fixes:**\n"
-        if fixes_list:
-            for fix in fixes_list:
-                fixes_section += f"* {fix}\n"
-        else:
-            fixes_section += "No new exception handling identified for bug fixes.\n"
-        summary_parts.append(fixes_section)
+        #fixes_section = "**Bug Fixes:**\n"
+        #if fixes_list:
+        #    for fix in fixes_list:
+        #        fixes_section += f"* {fix}\n"
+        #else:
+        #    fixes_section += "No new exception handling identified for bug fixes.\n"
+        #summary_parts.append(fixes_section)
 
         summary_output = "\n".join(summary_parts)
 
