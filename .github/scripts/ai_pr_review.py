@@ -237,7 +237,7 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
                     message = "- "
                     message += "\n - ".join(violations_desc)
                     message += "\n\n **Suggested Fix:**"
-                    message += f"\n ```code\n{suggested_fix}\n```"
+                    message += f"\n ```code\n{suggested_fix.strip()}\n```"
                     violations_output.append(
                         {"file": file, "line": line, "message": message}
                     )
