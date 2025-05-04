@@ -266,7 +266,7 @@ jobs:
                  continue;
               }
 
-              const commentBody = `**🤖 AI Coding Standard Violation:**\n\n${violation.message}`;
+              const commentBody = `**✨ AI Coding Standard:**\n\n${violation.message}`;
 
               console.log(`Posting violation comment on ${violation.file}, line ${violation.line}`);
 
