@@ -308,17 +308,17 @@ def parse_args():
 
 def read_file(file_path):
     try:
-        with open(args.standards_file, "r", encoding="utf-8") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         print(
-            f"Error: Coding standards file not found at '{args.standards_file}'",
+            f"Error: Coding standards file not found at '{file_path}'",
             file=sys.stderr,
         )
         sys.exit(1)
     except Exception as e:
         print(
-            f"Error reading coding standards file '{args.standards_file}': {e}",
+            f"Error reading coding standards file '{file_path}': {e}",
             file=sys.stderr,
         )
         sys.exit(1)
