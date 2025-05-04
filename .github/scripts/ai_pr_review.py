@@ -254,9 +254,7 @@ def generate_block_violation_comment(block_violation):
         
         message = violations_part + suggested_fix_part
         
-        violations_output.append(
-            {"file": file, "line": line, "message": message}
-        )
+        return { "file": file, "line": line, "message": message }
     except Exception as e:
         print(
             f"Error processing individual violation: {e}\nViolation data: {block_violation}",
@@ -277,9 +275,9 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
 
         block_violations = parsed_json.get("blockViolations", [])
         violations_output = [
-            generate_block_violation_comment(block_violation)
+            block_violation_comment
             for block_violation in block_violations
-            if generate_block_violation_comment(block_violation) is not None
+            if (block_violation_comment := generate_block_violation_comment(block_violation)) is not None
         ]
 
     except json.JSONDecodeError as e:
