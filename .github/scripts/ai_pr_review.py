@@ -264,7 +264,7 @@ def generate_block_violation_comment(block_violation):
 def parse_ai_response(response_text: str) -> Dict[str, Any]:
     """Parses the AI's JSON response into summary and violations."""
     try:
-        parsed_json: Dict[str, Any] = {} = json.loads(response_text)
+        parsed_json: Dict[str, Any] = json.loads(response_text)
         summary_data = parsed_json.get("summary", {})
         summary_output = generate_summary_comment(summary_data)
 
