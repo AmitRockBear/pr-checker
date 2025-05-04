@@ -209,7 +209,7 @@ def generate_summary_comment_new_features_part(features_list):
         features_part_description = "No new features identified.\n"
     else:
         features_part_description = "".join([f"* {feature}\n" for feature in features_list])
-    return features_part_title + features_bullet_points_list
+    return features_part_title + features_part_description
 
 def generate_summary_comment(summary_data):
     description = summary_data.get("description", "No description provided.")
@@ -323,7 +323,6 @@ def read_file(file_path):
         )
         sys.exit(1)
 
-# --- Main Execution ---
 def main():
     args = parse_args()
 
