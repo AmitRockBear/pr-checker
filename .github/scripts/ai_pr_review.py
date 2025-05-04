@@ -8,6 +8,7 @@ import requests
 import re  # Import regular expressions
 from typing import Dict, Any, List, Optional, TypedDict
 
+LLM_API_KEY_ENV_NAME = "GEMINI_API_KEY"
 
 # --- Type Hinting for Violations ---
 class BlockViolation(TypedDict):
@@ -94,18 +95,18 @@ You are an expert AI assistant specializing in code review, analysis, and adhere
 </Instructions>
 """
 
-# --- Helper Functions ---
-
-
 def build_prompt(title: str, description: str, diff: str, standards: str) -> str:
-    """Builds the full prompt string for the Gemini API."""
-    return PROMPT_TEMPLATE.format(
-        pr_title=title,
-        pr_description=description,
-        file_diffs=diff,
-        coding_standards_md=standards,
-    )
-
+    """Builds the full prompt string for the LLM."""
+    try:
+        return PROMPT_TEMPLATE.format(
+            pr_title=title,
+            pr_description=description,
+            file_diffs=diff,
+            coding_standards_md=standards,
+        )
+    except Exception as e:
+        print(f"Script failed during prompt building: {e}", file=sys.stderr)
+        sys.exit(1)  
 
 def call_gemini_api(api_key: str, prompt: str) -> str:
     """Calls the Gemini API and returns the generated text."""
@@ -184,6 +185,83 @@ def call_gemini_api(api_key: str, prompt: str) -> str:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 
+def generate_summary_comment_description_part(description):
+    return f"**Description:**\n{description}\n"
+
+def generate_summary_comment_changes_part(changes_list):
+    changes_part_title = "**Changes:**\n"
+    if not changes_list:
+        changes_part_description = "No file changes detected.\n"
+        return changes_part_title + changes_part_description
+
+    table_header = "| File Name | Change Summary |\n|---|---|\n"
+    table_rows = "".join([
+        f"| `{change.get('fileName', 'N/A')}` | {change.get('changeSummary', 'N/A')} |\n"
+        for change in changes_list
+    ])    
+    table = table_header + table_rows
+
+    return changes_part_title + table
+
+def generate_summary_comment_new_features_part(features_list):
+    features_part_title = "**New Features:**\n"
+    if not features_list:
+        features_part_description = "No new features identified.\n"
+    else:
+        features_part_description = "".join([f"* {feature}\n" for feature in features_list])
+    return features_part_title + features_bullet_points_list
+
+def generate_summary_comment(summary_data):
+    description = summary_data.get("description", "No description provided.")
+    description_part = generate_summary_comment_description_part(description)
+    
+    changes_list = summary_data.get("changes", [])
+    changes_part = generate_summary_comment_changes_part(changes_list)
+    
+    features_list = summary_data.get("newFeatures", [])
+    new_features_part = generate_summary_comment_new_features_part(features_list)
+    
+    summary_parts_list = [description_part, changes_part, new_features_part]
+
+    return "\n".join(summary_parts_list)
+
+def generate_block_violation_comment_violations_part(violations_list):
+    violations_part_title = "**Violations:**\n"
+    if not violations_list:
+        violations_part_description = "No violations found.\n"
+    else:
+        violations_part_description = "".join(f"\n * {violation}" for violation in violations_list)
+    return violations_part_title + violations_part_description + "\n\n"
+
+def generate_block_violation_comment_suggested_fix_part(suggested_fix):
+    suggested_fix_part_title = "**Suggested Fix:**\n"
+    suggested_fix_part_code_suggestion = f"```code\n{suggested_fix.strip()}\n```"
+    return suggested_fix_part_title + suggested_fix_part_code_suggestion
+
+def generate_block_violation_comment(block_violation):
+    try:
+        file = block_violation.get("file")
+        line = block_violation.get("line")
+        violations_list = block_violation.get("violations", [])
+        if not file or not isinstance(line, int) or not violations_list:
+            print("Error: one or more of the following is invalid — the file path is None, the line is not an integer, or the violations list is empty.")
+            return
+
+        violations_part = generate_block_violation_comment_violations_part(violations_list)
+        
+        suggested_fix = block_violation.get("suggestedFix", "Could not come up with a suggested fix.")
+        suggested_fix_part = generate_block_violation_comment_suggested_fix_part(suggested_fix)
+        
+        message = violations_part + suggested_fix_part
+        
+        violations_output.append(
+            {"file": file, "line": line, "message": message}
+        )
+    except Exception as e:
+        print(
+            f"Error processing individual violation: {e}\nViolation data: {block_violation}",
+            file=sys.stderr,
+        )   
 
 def parse_ai_response(response_text: str) -> Dict[str, Any]:
     """Parses the AI's JSON response into summary and violations."""
@@ -191,66 +269,18 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
     violations_output: List[BlockViolation] = []
     parsed_json: Dict[str, Any] = {}
 
+    parsed_json = json.loads(response_text)
+
     try:
-        parsed_json = json.loads(response_text)
-
-        # --- Extract Summary ---
         summary_data = parsed_json.get("summary", {})
-        description = summary_data.get("description", "No description provided.")
-        changes_list = summary_data.get("changes", [])
-        features_list = summary_data.get("newFeatures", [])
+        summary_output = generate_summary_comment(summary_data)
 
-        # Format summary into Markdown string
-        summary_parts = [f"**Description:**\n{description}\n"]
-
-        changes_table = "**Changes:**\n"
-        if changes_list:
-            changes_table += "| File Path | Change Summary |\n|---|---|\n"
-            for change in changes_list:
-                changes_table += f"| `{change.get('fileName', 'N/A')}` | {change.get('changeSummary', 'N/A')} |\n"
-        else:
-            changes_table += "No file changes detected.\n"
-        summary_parts.append(changes_table)
-
-        features_section = "**New Features:**\n"
-        if features_list:
-            for feature in features_list:
-                features_section += f"* {feature}\n"
-        else:
-            features_section += "No new features identified.\n"
-        summary_parts.append(features_section)
-
-        summary_output = "\n".join(summary_parts)
-
-        # --- Extract Violations ---
-        block_violations_data = parsed_json.get("blockViolations", [])
-        for block_violation in block_violations_data:
-            try:
-                file = block_violation.get("file")
-                line = block_violation.get("line")
-                violations_desc = block_violation.get("violations", [])
-                suggested_fix = block_violation.get("suggestedFix", "Could not come up with a suggested fix.")
-
-                if file and isinstance(line, int) and violations_desc:
-                    # Format the message for the GitHub comment body
-                    # Create a message by joining the violations and separating them with newlines
-                    message = "- "
-                    message += "\n - ".join(violations_desc)
-                    message += "\n\n **Suggested Fix:**"
-                    message += f"\n ```code\n{suggested_fix.strip()}\n```"
-                    violations_output.append(
-                        {"file": file, "line": line, "message": message}
-                    )
-                else:
-                    print(
-                        f"Warning: Skipping violation due to missing/invalid fields: {block_violation}",
-                        file=sys.stderr,
-                    )
-            except Exception as e:
-                print(
-                    f"Error processing individual violation: {e}\nViolation data: {block_violation}",
-                    file=sys.stderr,
-                )
+        block_violations = parsed_json.get("blockViolations", [])
+        violations_output = [
+            generate_block_violation_comment(block_violation)
+            for block_violation in block_violations
+            if generate_block_violation_comment(block_violation) is not None
+        ]
 
     except json.JSONDecodeError as e:
         print(f"Error: Failed to decode AI response as JSON: {e}", file=sys.stderr)
@@ -265,28 +295,21 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
 
     return {"summary": summary_output, "violations": violations_output}
 
-
-# --- Main Execution ---
-def main():
-    parser = argparse.ArgumentParser(description="Generate AI PR Review using Gemini.")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate AI PR Review.")
     parser.add_argument("--title", required=True, help="Pull Request title")
     parser.add_argument("--description", required=True, help="Pull Request description")
     parser.add_argument("--diff", required=True, help="File diffs content")
     parser.add_argument(
-        "--standards-file", required=True, help="Path to coding standards markdown file"
+        "--standards-file", required=True, help="Path to coding standards file"
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("Error: GEMINI_API_KEY environment variable not set.", file=sys.stderr)
-        sys.exit(1)
-
-    standards_content = ""
+def read_file(file_path):
     try:
         with open(args.standards_file, "r", encoding="utf-8") as f:
-            standards_content = f.read()
+            return f.read()
     except FileNotFoundError:
         print(
             f"Error: Coding standards file not found at '{args.standards_file}'",
@@ -300,29 +323,33 @@ def main():
         )
         sys.exit(1)
 
-    full_prompt = None
-    try:
-        full_prompt = build_prompt(
-            args.title, args.description, args.diff, standards_content
-        )
-    except Exception as e:
-        print(f"Script failed during prompt building: {e}", file=sys.stderr)
+# --- Main Execution ---
+def main():
+    args = parse_args()
+
+    api_key = os.environ.get(LLM_API_KEY_ENV_NAME)
+    if not api_key:
+        print(f"Error: {LLM_API_KEY_ENV_NAME} environment variable not set.", file=sys.stderr)
         sys.exit(1)
 
-    if full_prompt:
-        try:
-            raw_review_comment = call_gemini_api(api_key, full_prompt)
+    standards_content = read_file(args.standards_file)
+    full_prompt = build_prompt(
+            args.title, args.description, args.diff, standards_content
+        )
 
-            # Parse the raw response
-            parsed_data = parse_ai_response(raw_review_comment)
+    try:
+        raw_review_comment = call_gemini_api(api_key, full_prompt)
 
-            # Output the structured data as JSON
-            print(json.dumps(parsed_data, indent=2))  # Output JSON
+        # Parse the raw response
+        parsed_data = parse_ai_response(raw_review_comment)
 
-        except Exception as e:
-            # Errors during API call or parsing are caught
-            print(f"Script failed during API call or parsing: {e}", file=sys.stderr)
-            sys.exit(1)
+        # Output the structured data as JSON
+        print(json.dumps(parsed_data, indent=2))  # Output JSON
+
+    except Exception as e:
+        # Errors during API call or parsing are caught
+        print(f"Script failed during API call or parsing: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
