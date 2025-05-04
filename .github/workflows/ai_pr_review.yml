@@ -203,7 +203,7 @@ jobs:
                return;
             }
 
-            const commentHeader = `## 🤖 AI Pull Request Summary\n\n`;
+            const commentHeader = `## ✨ AI Pull Request Summary\n\n`;
             const fullComment = commentHeader + summaryBody;
 
             try {
