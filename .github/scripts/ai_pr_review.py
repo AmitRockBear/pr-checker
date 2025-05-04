@@ -244,7 +244,6 @@ def generate_block_violation_comment(block_violation):
         line = block_violation.get("line")
         violations_list = block_violation.get("violations", [])
         if not file or not isinstance(line, int) or not violations_list:
-            print("Error: one or more of the following is invalid — the file path is None, the line is not an integer, or the violations list is empty.")
             return
 
         violations_part = generate_block_violation_comment_violations_part(violations_list)
@@ -265,11 +264,9 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
     """Parses the AI's JSON response into summary and violations."""
     try:
         parsed_json = json.loads(response_text)
-        print("parsed json successfully")
 
         summary_data = parsed_json.get("summary", {})
         summary_output = generate_summary_comment(summary_data)
-        print("summary_output generated")
 
         block_violations = parsed_json.get("blockViolations", [])
         violations_output = [
@@ -277,8 +274,6 @@ def parse_ai_response(response_text: str) -> Dict[str, Any]:
             for block_violation in block_violations
             if (block_violation_comment := generate_block_violation_comment(block_violation)) is not None
         ]
-        print("violations_output generated")
-
     except json.JSONDecodeError as e:
         print(f"Error: Failed to decode AI response as JSON: {e}", file=sys.stderr)
         print(f"Raw response received:\n---\n{response_text}\n---", file=sys.stderr)
