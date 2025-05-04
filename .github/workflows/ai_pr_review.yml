@@ -126,6 +126,7 @@ jobs:
           fi
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
           PR_TITLE: ${{ steps.pr_metadata.outputs.pr_title }}
           PR_DESCRIPTION: ${{ steps.pr_metadata.outputs.pr_description }}
           PR_DIFF_CONTENT: ${{ steps.pr_diff.outputs.pr_diff_content }}
